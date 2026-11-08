@@ -179,9 +179,25 @@ extension SyncEngine {
         let fm = FileManager.default
         let vaultDir = PathConstants.vaultDirectory
         let vaultStdPath = vaultDir.standardizedFileURL.path
-        let vaultResolvedPath = vaultDir.resolvingSymlinksInPath().path
+
+        func resolveEvenIfMissing(_ url: URL) -> String {
+            let std = url.standardizedFileURL
+            if fm.fileExists(atPath: std.path) {
+                return std.resolvingSymlinksInPath().path
+            }
+            let parent = std.deletingLastPathComponent()
+            let leaf = std.lastPathComponent
+            if parent.path == std.path || leaf.isEmpty {
+                return std.path
+            }
+            return URL(fileURLWithPath: resolveEvenIfMissing(parent))
+                .appendingPathComponent(leaf)
+                .standardizedFileURL.path
+        }
+
+        let vaultResolvedPath = resolveEvenIfMissing(vaultDir)
         let vaultSkillsStdPath = PathConstants.vaultSkillsDirectory.standardizedFileURL.path
-        let vaultSkillsResolvedPath = PathConstants.vaultSkillsDirectory.resolvingSymlinksInPath().path
+        let vaultSkillsResolvedPath = resolveEvenIfMissing(PathConstants.vaultSkillsDirectory)
 
         var summary = UninstallRestoreSummary(vaultPath: vaultDir.path)
 
@@ -191,12 +207,12 @@ extension SyncEngine {
                 return nil
             }
             let absDest = URL(fileURLWithPath: rawDest, relativeTo: symlinkURL.deletingLastPathComponent()).standardizedFileURL
-            let resolvedDestPath = absDest.resolvingSymlinksInPath().path
+            let resolvedDestPath = resolveEvenIfMissing(absDest)
             if absDest.path == vaultStdPath
                 || absDest.path.hasPrefix(vaultStdPath + "/")
                 || resolvedDestPath == vaultResolvedPath
                 || resolvedDestPath.hasPrefix(vaultResolvedPath + "/") {
-                return absDest
+                return URL(fileURLWithPath: resolvedDestPath)
             }
             return nil
         }
@@ -207,27 +223,42 @@ extension SyncEngine {
             for item in items {
                 guard let vaultTarget = vaultDestination(for: item) else { continue }
                 let parentStd = vaultTarget.deletingLastPathComponent().standardizedFileURL.path
-                let parentResolved = vaultTarget.deletingLastPathComponent().resolvingSymlinksInPath().path
+                let parentResolved = resolveEvenIfMissing(vaultTarget.deletingLastPathComponent())
                 let isTopLevelVaultSkill = (parentStd == vaultSkillsStdPath || parentResolved == vaultSkillsResolvedPath)
 
-                try? fm.removeItem(at: item)
                 if isTopLevelVaultSkill && fm.fileExists(atPath: vaultTarget.path) {
-                    if (try? fm.copyItem(at: vaultTarget, to: item)) != nil {
+                    let stagingURL = skillsDir.appendingPathComponent(".agymg_restore_\(UUID().uuidString)")
+                    do {
+                        try fm.copyItem(at: vaultTarget, to: stagingURL)
+                        try fm.removeItem(at: item)
+                        try fm.moveItem(at: stagingURL, to: item)
                         summary.restoredGlobalSkills.append(item.path)
+                    } catch {
+                        try? fm.removeItem(at: stagingURL)
                     }
+                } else {
+                    try? fm.removeItem(at: item)
                 }
             }
         }
 
         // 2. Restore global plugins in ~/.gemini/config/plugins back to standalone directories
-        if let pluginItems = try? fm.contentsOfDirectory(at: PathConstants.globalPluginsDirectory, includingPropertiesForKeys: nil) {
+        let globalPluginsDir = PathConstants.globalPluginsDirectory
+        if let pluginItems = try? fm.contentsOfDirectory(at: globalPluginsDir, includingPropertiesForKeys: nil) {
             for item in pluginItems {
                 guard let vaultTarget = vaultDestination(for: item) else { continue }
-                try? fm.removeItem(at: item)
                 if fm.fileExists(atPath: vaultTarget.path) {
-                    if (try? fm.copyItem(at: vaultTarget, to: item)) != nil {
+                    let stagingURL = globalPluginsDir.appendingPathComponent(".agymg_restore_\(UUID().uuidString)")
+                    do {
+                        try fm.copyItem(at: vaultTarget, to: stagingURL)
+                        try fm.removeItem(at: item)
+                        try fm.moveItem(at: stagingURL, to: item)
                         summary.restoredGlobalPlugins.append(item.path)
+                    } catch {
+                        try? fm.removeItem(at: stagingURL)
                     }
+                } else {
+                    try? fm.removeItem(at: item)
                 }
             }
         }
@@ -293,6 +324,7 @@ extension SyncEngine {
         // 5. Remove Claude OAuth helper script and strip its headersHelper references from ~/.claude.json
         let helperScript = PathConstants.claudeMCPOAuthHelperScript
         let helperPath = helperScript.path
+        let helperResolvedPath = resolveEvenIfMissing(helperScript)
         if fm.fileExists(atPath: helperPath) || isSymlink(at: helperScript) {
             if (try? fm.removeItem(at: helperScript)) != nil {
                 summary.removedHelperScript = true
@@ -303,7 +335,8 @@ extension SyncEngine {
             var modified = false
             for (serverId, rawVal) in servers {
                 guard var serverDict = rawVal as? [String: Any] else { continue }
-                if (serverDict["headersHelper"] as? String) == helperPath {
+                if let ref = serverDict["headersHelper"] as? String,
+                   (ref == helperPath || ref == helperResolvedPath) {
                     serverDict.removeValue(forKey: "headersHelper")
                     servers[serverId] = serverDict
                     modified = true
@@ -347,12 +380,29 @@ extension SyncEngine {
             }
         }
 
-        // 6. Clean agymg SessionStart hook entries from ~/.claude/settings.json if present
-        let settingsFile = PathConstants.claudeSettingsFile.resolvingSymlinksInPath()
-        if let settingsData = try? Data(contentsOf: settingsFile),
-           var settingsRoot = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any],
-           var hooksDict = settingsRoot["hooks"] as? [String: Any],
-           let sessionStartList = hooksDict["SessionStart"] as? [[String: Any]] {
+        // 6. Clean agymg SessionStart hook entries from Claude & Antigravity settings.json files if present
+        var candidateSettingsFiles: [URL] = [
+            PathConstants.claudeSettingsFile,
+            PathConstants.geminiSettingsFile,
+            PathConstants.globalConfigSettingsFile
+        ]
+        for profHome in PathConstants.antigravityProfileHomes {
+            let profClaudeDir = profHome.appendingPathComponent(".claude", isDirectory: true)
+            if !isSymlink(at: profClaudeDir) {
+                candidateSettingsFiles.append(profClaudeDir.appendingPathComponent("settings.json"))
+            }
+        }
+
+        var seenSettingsPaths: Set<String> = []
+        for candidate in candidateSettingsFiles {
+            let settingsFile = candidate.resolvingSymlinksInPath()
+            guard seenSettingsPaths.insert(settingsFile.path).inserted,
+                  let settingsData = try? Data(contentsOf: settingsFile),
+                  var settingsRoot = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any],
+                  var hooksDict = settingsRoot["hooks"] as? [String: Any],
+                  let sessionStartList = hooksDict["SessionStart"] as? [[String: Any]] else {
+                continue
+            }
             var hooksModified = false
             var filteredGroups: [[String: Any]] = []
             for var group in sessionStartList {
@@ -369,7 +419,12 @@ extension SyncEngine {
                         filteredGroups.append(group)
                     }
                 } else {
-                    filteredGroups.append(group)
+                    let directCmd = (group["command"] as? String) ?? ""
+                    if directCmd.contains("hook-session-start") {
+                        hooksModified = true
+                    } else {
+                        filteredGroups.append(group)
+                    }
                 }
             }
             if hooksModified {

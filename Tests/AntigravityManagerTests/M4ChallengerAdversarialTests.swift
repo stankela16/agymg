@@ -220,7 +220,7 @@ final class M4ChallengerAdversarialTests: XCTestCase {
         try payloadData.write(to: nestedDir.appendingPathComponent("apiKey.txt"))
         try "{\"name\":\"User Authored\"}".write(to: customPluginDir.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
 
-        var project = ProjectProfile(
+        let project = ProjectProfile(
             id: "safe-cycle",
             name: "SafeCycleProj",
             path: projectDir.path,
@@ -236,11 +236,10 @@ final class M4ChallengerAdversarialTests: XCTestCase {
             path: customPluginDir.path
         )
 
-        // SYNC 1: Disabled -> Safe copy to vault, then delete from project
+        // SYNC 1: Disabled -> Safe non-destructive copy to Vault; physical project directory MUST NOT be deleted (P1 #4)
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [], allPlugins: [pluginDef])
 
-        // Verify project folder is cleaned
-        XCTAssertFalse(fm.fileExists(atPath: customPluginDir.path), "Project directory must be cleaned")
+        XCTAssertTrue(fm.fileExists(atPath: customPluginDir.path), "Physical project plugin directory must never be deleted (P1 #4)")
 
         // Verify vault has complete copy with nested files
         let vaultPluginDir = PathConstants.vaultPluginsDirectory.appendingPathComponent("user-authored-plugin")
@@ -248,25 +247,42 @@ final class M4ChallengerAdversarialTests: XCTestCase {
         let restoredKey = try String(contentsOf: vaultPluginDir.appendingPathComponent("config/keys/apiKey.txt"), encoding: .utf8)
         XCTAssertEqual(restoredKey, "SUPER_SECRET_PAYLOAD_ABC123", "Nested file content must be preserved without data loss")
 
-        // SYNC 2: Re-enable -> Project creates symlink pointing to Vault
-        project.enabledPluginIds.insert("user-authored-plugin")
-        try await syncEngine.syncProject(project: project, allServers: [], allSkills: [], allPlugins: [pluginDef])
+        // SYNC 2: Enable on a consumer project -> creates symlink pointing to Vault
+        let consumerDir = testSandboxDir.appendingPathComponent("Projects/ConsumerCycleProj", isDirectory: true)
+        try fm.createDirectory(at: consumerDir, withIntermediateDirectories: true)
+        let consumerPluginTarget = consumerDir.appendingPathComponent(".agents/plugins/user-authored-plugin")
+        var consumerProject = ProjectProfile(
+            id: "consumer-cycle",
+            name: "ConsumerCycleProj",
+            path: consumerDir.path,
+            enabledMCPServerIds: [],
+            enabledSkillIds: [],
+            enabledPluginIds: ["user-authored-plugin"]
+        )
+        let vaultBackedDef = PluginDefinition(
+            id: "user-authored-plugin",
+            name: "User Authored",
+            description: "Test",
+            path: vaultPluginDir.path
+        )
+        try await syncEngine.syncProject(project: consumerProject, allServers: [], allSkills: [], allPlugins: [vaultBackedDef])
 
-        XCTAssertTrue(fm.fileExists(atPath: customPluginDir.path), "Re-enabled plugin must exist")
-        let isSymlink = await syncEngine.isSymlink(at: customPluginDir)
-        XCTAssertTrue(isSymlink, "Re-enabled plugin must be a symlink")
-        let resolved = customPluginDir.resolvingSymlinksInPath().path
+        XCTAssertTrue(fm.fileExists(atPath: consumerPluginTarget.path), "Enabled plugin symlink must exist")
+        let isSymlink = await syncEngine.isSymlink(at: consumerPluginTarget)
+        XCTAssertTrue(isSymlink, "Enabled plugin must be a symlink")
+        let resolved = consumerPluginTarget.resolvingSymlinksInPath().path
         XCTAssertEqual(resolved, vaultPluginDir.resolvingSymlinksInPath().path)
 
         // Reading through the symlink works
-        let readFromSymlink = try String(contentsOf: customPluginDir.appendingPathComponent("config/keys/apiKey.txt"), encoding: .utf8)
+        let readFromSymlink = try String(contentsOf: consumerPluginTarget.appendingPathComponent("config/keys/apiKey.txt"), encoding: .utf8)
         XCTAssertEqual(readFromSymlink, "SUPER_SECRET_PAYLOAD_ABC123")
 
-        // SYNC 3: Disable again -> Symlink is safely removed, Vault copy remains completely intact
-        project.enabledPluginIds.remove("user-authored-plugin")
-        try await syncEngine.syncProject(project: project, allServers: [], allSkills: [], allPlugins: [pluginDef])
+        // SYNC 3: Disable again -> Symlink is safely removed, Vault copy and original physical folder remain intact
+        consumerProject.enabledPluginIds.remove("user-authored-plugin")
+        try await syncEngine.syncProject(project: consumerProject, allServers: [], allSkills: [], allPlugins: [vaultBackedDef])
 
-        XCTAssertFalse(fm.fileExists(atPath: customPluginDir.path), "Symlink must be removed")
+        XCTAssertFalse(fm.fileExists(atPath: consumerPluginTarget.path), "Symlink must be removed")
+        XCTAssertTrue(fm.fileExists(atPath: customPluginDir.path), "Original physical folder MUST remain intact")
         XCTAssertTrue(fm.fileExists(atPath: vaultPluginDir.path), "Vault copy MUST remain intact")
         let stillIntact = try String(contentsOf: vaultPluginDir.appendingPathComponent("config/keys/apiKey.txt"), encoding: .utf8)
         XCTAssertEqual(stillIntact, "SUPER_SECRET_PAYLOAD_ABC123")

@@ -123,12 +123,9 @@ extension SyncEngine {
                 if isSymlink(at: targetURL) {
                     try? fm.removeItem(at: targetURL)
                 } else if fm.fileExists(atPath: targetURL.path),
-                          !fm.fileExists(atPath: vaultPluginURL.path),
-                          !isGitTrackedPath(targetURL, in: projectURL) {
+                          !fm.fileExists(atPath: vaultPluginURL.path) {
                     try? fm.createDirectory(at: vaultPluginsDir, withIntermediateDirectories: true)
-                    if (try? fm.copyItem(at: targetURL, to: vaultPluginURL)) != nil {
-                        try? fm.removeItem(at: targetURL)
-                    }
+                    try? fm.copyItem(at: targetURL, to: vaultPluginURL)
                 }
             }
         }
@@ -138,34 +135,6 @@ extension SyncEngine {
 
         // 5. Sync Project Skills & Plugin Skills to Claude (<project>/.claude/skills/<skill-id>)
         syncClaudeProjectSkills(project: project, allSkills: allSkills, allPlugins: allPlugins)
-    }
-
-    private func isGitTrackedPath(_ targetURL: URL, in projectURL: URL) -> Bool {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: projectURL.appendingPathComponent(".git").path) else {
-            return false
-        }
-        let repoStd = projectURL.standardizedFileURL.path
-        let targetStd = targetURL.standardizedFileURL.path
-        guard targetStd.hasPrefix(repoStd + "/") else { return false }
-        let relativePath = String(targetStd.dropFirst(repoStd.count + 1))
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-C", repoStd, "ls-files", "--", relativePath]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            let out = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return true }
-            let text = String(data: out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return !text.isEmpty
-        } catch {
-            return true
-        }
     }
 
     public func syncClaudeProjectSkills(
@@ -453,6 +422,12 @@ REFRESH_BUFFER_SECONDS = 300
 
 
 def get_real_home() -> str:
+    override = os.environ.get("AGYMG_GEMINI_DIR", "").strip()
+    if override:
+        resolved = os.path.realpath(os.path.expanduser(override))
+        if os.path.basename(resolved) == ".gemini":
+            return os.path.dirname(resolved)
+        return resolved
     try:
         return os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
     except Exception:
@@ -510,13 +485,31 @@ def find_entry_key(data: dict, target_url: str):
     return None
 
 
+def is_allowed_token_url(token_url: str) -> bool:
+    if not token_url or not isinstance(token_url, str):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(token_url)
+    except Exception:
+        return False
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if scheme == "https":
+        return True
+    if scheme == "http" and host in ("127.0.0.1", "localhost", "::1"):
+        return True
+    return False
+
+
 def refresh_oauth_token(entry: dict):
     token_obj = entry.get("token") or {}
     refresh_token = token_obj.get("refresh_token")
     token_url = entry.get("token_url")
     client_id = entry.get("client_id")
 
-    if not refresh_token or not token_url:
+    if not refresh_token or not is_allowed_token_url(token_url):
         return None
 
     form_data = {
@@ -586,17 +579,43 @@ def clear_claude_needs_auth_cache(real_home: str, server_name: str):
     for cpath in cache_paths:
         if not os.path.isfile(cpath):
             continue
+        lock_path = cpath + ".lock"
+        lock_fd = None
         try:
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                orig_mode = os.stat(cpath).st_mode & 0o777
+            except Exception:
+                orig_mode = 0o600
             with open(cpath, "r", encoding="utf-8") as f:
                 cache_data = json.load(f)
             if isinstance(cache_data, dict) and server_name in cache_data:
                 del cache_data[server_name]
-                tmp_path = cpath + ".tmp"
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(cache_data, f)
-                os.replace(tmp_path, cpath)
+                tmp_path = f"{cpath}.tmp.{os.getpid()}"
+                fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, orig_mode)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as wf:
+                        json.dump(cache_data, wf)
+                    os.chmod(tmp_path, orig_mode)
+                    os.replace(tmp_path, cpath)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
         except Exception:
             pass
+        finally:
+            if lock_fd is not None:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
 
 
 def load_static_headers_fallback(real_home: str, server_url: str, server_name: str) -> dict:
@@ -681,34 +700,49 @@ def main():
 
         if is_token_expiring(token_obj):
             lock_path = os.path.join(os.path.dirname(oauth_file), ".mcp_oauth_tokens.lock")
+            lock_fd = None
             try:
-                with open(lock_path, "w") as lock_f:
-                    fcntl.flock(lock_f, fcntl.LOCK_EX)
-                    try:
-                        with open(oauth_file, "r", encoding="utf-8") as f:
-                            fresh_data = json.load(f)
-                        fresh_entry = fresh_data.get(key, entry)
-                        fresh_tok = fresh_entry.get("token") if isinstance(fresh_entry.get("token"), dict) else {}
-                        if is_token_expiring(fresh_tok):
-                            refreshed = refresh_oauth_token(fresh_entry)
-                            if refreshed:
-                                fresh_entry["token"] = refreshed
-                                fresh_data[key] = fresh_entry
-                                tmp_file = oauth_file + ".tmp"
-                                fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                                with os.fdopen(fd, "w", encoding="utf-8") as wf:
-                                    json.dump(fresh_data, wf, indent=2)
-                                os.chmod(tmp_file, 0o600)
-                                os.replace(tmp_file, oauth_file)
-                                token_obj = refreshed
-                            else:
-                                token_obj = fresh_tok
-                        else:
+                lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                with open(oauth_file, "r", encoding="utf-8") as f:
+                    fresh_data = json.load(f)
+                fresh_entry = fresh_data.get(key, entry)
+                fresh_tok = fresh_entry.get("token") if isinstance(fresh_entry.get("token"), dict) else {}
+                if is_token_expiring(fresh_tok):
+                    refreshed = refresh_oauth_token(fresh_entry)
+                    if refreshed:
+                        fresh_entry["token"] = refreshed
+                        fresh_data[key] = fresh_entry
+                        tmp_file = f"{oauth_file}.tmp.{os.getpid()}"
+                        fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        try:
+                            with os.fdopen(fd, "w", encoding="utf-8") as wf:
+                                json.dump(fresh_data, wf, indent=2)
+                            os.chmod(tmp_file, 0o600)
+                            os.replace(tmp_file, oauth_file)
+                            token_obj = refreshed
+                        except Exception:
+                            try:
+                                os.unlink(tmp_file)
+                            except Exception:
+                                pass
                             token_obj = fresh_tok
-                    finally:
-                        fcntl.flock(lock_f, fcntl.LOCK_UN)
+                    else:
+                        token_obj = fresh_tok
+                else:
+                    token_obj = fresh_tok
             except Exception:
                 pass
+            finally:
+                if lock_fd is not None:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                    try:
+                        os.close(lock_fd)
+                    except Exception:
+                        pass
 
         access_token = token_obj.get("access_token", "")
         if access_token:

@@ -30,11 +30,66 @@ public struct ProjectStackInspection: Sendable {
 public struct ProjectRecommendationService: Sendable {
     public init() {}
 
+    public static func isNonProjectContainerRoot(_ rawPath: String) -> Bool {
+        let std = URL(fileURLWithPath: rawPath, isDirectory: true).standardizedFileURL.path
+        let homeStd = PathConstants.homeDirectory.standardizedFileURL.path
+        let effHomeStd = PathConstants.effectiveHomeDirectory.standardizedFileURL.path
+        let geminiStd = PathConstants.geminiDirectory.standardizedFileURL.path
+        let claudeStd = PathConstants.claudeDirectory.standardizedFileURL.path
+
+        let exactRoots: Set<String> = [
+            "/",
+            "/Users",
+            "/tmp",
+            "/private/tmp",
+            "/var",
+            "/private/var",
+            homeStd,
+            effHomeStd,
+            geminiStd,
+            claudeStd
+        ]
+        if exactRoots.contains(std) {
+            return true
+        }
+
+        let parentPath = URL(fileURLWithPath: std).deletingLastPathComponent().path
+        let leafName = URL(fileURLWithPath: std).lastPathComponent
+        if parentPath == "/Users" && !leafName.isEmpty {
+            return true
+        }
+
+        let homeContainers: Set<String> = [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Library",
+            "Pictures",
+            "Movies",
+            "Music",
+            "Public",
+            "Applications",
+            "AntigravityProfiles"
+        ]
+        if (parentPath == homeStd || parentPath == effHomeStd) && homeContainers.contains(leafName) {
+            return true
+        }
+        let grandParentPath = URL(fileURLWithPath: parentPath).deletingLastPathComponent().path
+        if grandParentPath == "/Users" && homeContainers.contains(leafName) {
+            return true
+        }
+        return false
+    }
+
     public func inspectStack(at projectPath: String) -> ProjectStackInspection {
         let fm = FileManager.default
         let rootURL = URL(fileURLWithPath: projectPath, isDirectory: true)
         var info = ProjectStackInspection()
-        guard fm.fileExists(atPath: rootURL.path) else { return info }
+        guard !Self.isNonProjectContainerRoot(rootURL.path),
+              fm.fileExists(atPath: rootURL.path) else {
+            return info
+        }
+        let rootStd = rootURL.standardizedFileURL.path
 
         let topEntries = (try? fm.contentsOfDirectory(
             at: rootURL,
@@ -79,11 +134,17 @@ public struct ProjectRecommendationService: Sendable {
             info.isMacOSTarget = true
         }
 
-        // Collect 1-level and 2-level subdirectories (bounded, excluding heavy/hidden dirs)
+        // Collect 1-level and 2-level subdirectories (bounded, excluding heavy/hidden/TCC container dirs)
         let ignoredDirs: Set<String> = ["node_modules", ".git", ".build", ".next", "dist", "build", ".agents", ".claude", "DerivedData"]
         var firstLevelDirs: [URL] = []
         var secondLevelDirs: [URL] = []
         for entry in topEntries where !ignoredDirs.contains(entry.lastPathComponent) && !entry.lastPathComponent.hasPrefix(".") {
+            if Self.isNonProjectContainerRoot(entry.path) {
+                continue
+            }
+            if PathConstants.isTCCProtectedPath(entry.path) && !PathConstants.isTCCProtectedPath(rootStd) {
+                continue
+            }
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
                 firstLevelDirs.append(entry)
@@ -95,7 +156,7 @@ public struct ProjectRecommendationService: Sendable {
                             if subName.hasSuffix(".xcodeproj") {
                                 xcodeprojURLs.append(sub)
                             }
-                        } else if !ignoredDirs.contains(subName) && !subName.hasPrefix(".") {
+                        } else if !ignoredDirs.contains(subName) && !subName.hasPrefix(".") && !Self.isNonProjectContainerRoot(sub.path) {
                             var subIsDir: ObjCBool = false
                             if fm.fileExists(atPath: sub.path, isDirectory: &subIsDir), subIsDir.boolValue {
                                 secondLevelDirs.append(sub)

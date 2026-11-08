@@ -106,8 +106,19 @@ public enum PathConstants {
         ProcessInfo.processInfo.arguments.contains(where: { $0.contains("xctest") || $0.contains("XCTest") })
     }
 
+    private static let cachedHomeDirectory: URL = {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }()
+
+    private static var testFallbackGeminiDirectoryURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("AntigravityTestAirlock/.gemini", isDirectory: true)
+    }
+
     private static var testFallbackGeminiDirectory: URL {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("AntigravityTestAirlock/.gemini", isDirectory: true)
+        let dir = testFallbackGeminiDirectoryURL
         try? FileManager.default.createDirectory(at: dir.appendingPathComponent("manager-vault", isDirectory: true), withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: dir.appendingPathComponent("config", isDirectory: true), withIntermediateDirectories: true)
         return dir
@@ -120,10 +131,7 @@ public enum PathConstants {
     }
 
     public static var homeDirectory: URL {
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
+        cachedHomeDirectory
     }
 
     public static var hasEnvironmentOverride: Bool {
@@ -254,7 +262,14 @@ public enum PathConstants {
 
     // MARK: - Claude Integration Paths
     public static var effectiveHomeDirectory: URL {
-        let gemini = geminiDirectory
+        let gemini: URL
+        if let custom = customGeminiDirectory {
+            gemini = custom
+        } else if isRunningUnderTests {
+            gemini = testFallbackGeminiDirectoryURL
+        } else {
+            gemini = geminiDirectory
+        }
         if gemini.lastPathComponent == ".gemini" {
             return gemini.deletingLastPathComponent()
         }
@@ -307,6 +322,14 @@ public enum PathConstants {
 
     public static var claudeSettingsFile: URL {
         claudeDirectory.appendingPathComponent("settings.json")
+    }
+
+    public static var geminiSettingsFile: URL {
+        geminiDirectory.appendingPathComponent("settings.json")
+    }
+
+    public static var globalConfigSettingsFile: URL {
+        globalConfigDirectory.appendingPathComponent("settings.json")
     }
 
     public static var allClaudeNeedsAuthCacheFiles: [URL] {

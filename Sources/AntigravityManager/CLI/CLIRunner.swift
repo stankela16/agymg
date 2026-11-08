@@ -238,7 +238,7 @@ public enum CLIRunner {
         let vault = VaultService()
         await vault.initializeVaultIfNeeded()
 
-        let rawPath = requestedPath ?? currentDirectoryPath
+        let rawPath = resolveCLIPath(requestedPath, relativeTo: currentDirectoryPath)
         let snapshot = await buildSnapshot(for: rawPath, vault: vault, source: "cli-brief", readOnly: false)
 
         if outputJSON {
@@ -353,10 +353,12 @@ public enum CLIRunner {
         let skillScanner = SkillScannerService()
         let pluginScanner = PluginScannerService()
 
-        var projects = await vault.loadSavedProjectsUnconditional()
-        let (allServers, _) = await vault.scanAndIngestServers(projects: projects)
+        let targetRawPath = isGlobal ? nil : resolveCLIPath(requestedPath, relativeTo: currentDirectoryPath)
+        var projects = await vault.loadSavedProjectsWithoutTCC(allowingCWD: targetRawPath)
+        let safeProjects = projects.filter { canSafelyScanProject($0.path, allowingCWD: targetRawPath) }
+        let (allServers, _) = await vault.scanAndIngestServers(projects: safeProjects)
         let allSkills = skillScanner.scanVaultSkills()
-        let allPlugins = pluginScanner.scanAllPlugins(projects: projects)
+        let allPlugins = pluginScanner.scanAllPlugins(projects: safeProjects)
 
         let validServerIds = Set(allServers.map(\.id))
         let validSkillIds = Set(allSkills.map(\.id))
@@ -444,7 +446,7 @@ public enum CLIRunner {
             )
             return formatSetOutput(response, asJSON: outputJSON)
         } else {
-            let rawPath = requestedPath ?? currentDirectoryPath
+            let rawPath = targetRawPath ?? resolveCLIPath(nil, relativeTo: currentDirectoryPath)
             let (resolvedProject, isExistingInList) = resolveOrCreateProject(for: rawPath, in: projects)
             var targetProject = resolvedProject
 
@@ -560,7 +562,7 @@ public enum CLIRunner {
             }
         }
 
-        let targetRawPath = requestedPath ?? currentDirectoryPath
+        let targetRawPath = resolveCLIPath(requestedPath, relativeTo: currentDirectoryPath)
         let vault = VaultService()
 
         let snapshot = await buildSnapshot(for: targetRawPath, vault: vault, source: "session-start", readOnly: true)
@@ -580,6 +582,29 @@ public enum CLIRunner {
             return url.path
         }
         return trimmed
+    }
+
+    private static func resolveCLIPath(_ requestedPath: String?, relativeTo currentDirectoryPath: String) -> String {
+        let baseURL = URL(fileURLWithPath: currentDirectoryPath, isDirectory: true).standardizedFileURL
+        guard let raw = requestedPath?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return baseURL.path
+        }
+        let cleaned = normalizeHookPath(raw)
+        let expanded = (cleaned as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded).standardizedFileURL.path
+        }
+        return URL(fileURLWithPath: expanded, relativeTo: baseURL).standardizedFileURL.path
+    }
+
+    private static func canSafelyScanProject(_ projectPath: String, allowingCWD cwd: String?) -> Bool {
+        if !PathConstants.isTCCProtectedPath(projectPath) {
+            return true
+        }
+        guard let cwd else { return false }
+        let stdCWD = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        let stdProj = URL(fileURLWithPath: projectPath).standardizedFileURL.path
+        return stdCWD == stdProj || stdCWD.hasPrefix(stdProj + "/")
     }
 
     // MARK: - Subcommand: install-app
@@ -687,11 +712,28 @@ public enum CLIRunner {
 
         let xattr = Process()
         xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        xattr.arguments = ["-dr", "com.apple.quarantine", destAppURL.path]
+        xattr.arguments = ["-cr", destAppURL.path]
         xattr.standardOutput = Pipe()
         xattr.standardError = Pipe()
         try? xattr.run()
         xattr.waitUntilExit()
+
+        let verify = Process()
+        verify.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        verify.arguments = ["--verify", "--deep", "--strict", destAppURL.path]
+        verify.standardOutput = Pipe()
+        verify.standardError = Pipe()
+        try? verify.run()
+        verify.waitUntilExit()
+        if verify.terminationStatus != 0 {
+            let resign = Process()
+            resign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            resign.arguments = ["--force", "--deep", "--sign", "-", "--timestamp=none", destAppURL.path]
+            resign.standardOutput = Pipe()
+            resign.standardError = Pipe()
+            try? resign.run()
+            resign.waitUntilExit()
+        }
 
         return CLIExecutionResult(
             exitCode: 0,
@@ -791,7 +833,7 @@ public enum CLIRunner {
         if readOnly {
             servers = await vault.loadServersReadOnly()
         } else {
-            let safeProjects = projects.filter { !PathConstants.isTCCProtectedPath($0.path) || rawPath.hasPrefix($0.path) }
+            let safeProjects = projects.filter { canSafelyScanProject($0.path, allowingCWD: rawPath) }
             let (scanned, _) = await vault.scanAndIngestServers(projects: safeProjects)
             servers = scanned
         }
@@ -806,7 +848,7 @@ public enum CLIRunner {
         if readOnly {
             allPlugins = pluginScanner.scanAllPlugins(projects: [], readOnly: true)
         } else {
-            let safeProjects = projects.filter { !PathConstants.isTCCProtectedPath($0.path) || rawPath.hasPrefix($0.path) }
+            let safeProjects = projects.filter { canSafelyScanProject($0.path, allowingCWD: rawPath) }
             allPlugins = pluginScanner.scanAllPlugins(projects: safeProjects, readOnly: false)
         }
 

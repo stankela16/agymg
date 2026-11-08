@@ -133,16 +133,43 @@ public final class SkillEditorState {
 
     @discardableResult
     public func forkToVault() -> SkillDefinition? {
-        let sourceURL = URL(fileURLWithPath: skill.path)
-        let targetURL = PathConstants.vaultSkillsDirectory.appendingPathComponent(skill.id)
+        guard PathConstants.isSafeResourceId(skill.id) else {
+            statusFeedback = "Error forking to Vault: invalid skill ID '\(skill.id)'"
+            return nil
+        }
+
+        var sourceURL = URL(fileURLWithPath: skill.path)
+        if sourceURL.lastPathComponent.lowercased() == "skill.md" {
+            sourceURL = sourceURL.deletingLastPathComponent()
+        }
+        let vaultSkillsDir = PathConstants.vaultSkillsDirectory
+        let targetURL = vaultSkillsDir.appendingPathComponent(skill.id)
         let fm = FileManager.default
 
         do {
-            try fm.createDirectory(at: PathConstants.vaultSkillsDirectory, withIntermediateDirectories: true)
-            if fm.fileExists(atPath: targetURL.path) {
-                try fm.removeItem(at: targetURL)
+            try fm.createDirectory(at: vaultSkillsDir, withIntermediateDirectories: true)
+
+            let resolvedSource = sourceURL.resolvingSymlinksInPath().path
+            let resolvedTarget = (fm.fileExists(atPath: targetURL.path) ? targetURL.resolvingSymlinksInPath() : targetURL.standardizedFileURL).path
+            if resolvedSource == resolvedTarget && fm.fileExists(atPath: targetURL.path) {
+                var newSkill = skill
+                newSkill.origin = .vault
+                newSkill.path = targetURL.path
+                statusFeedback = "✓ Forked to Master Vault (\(skill.id))"
+                return newSkill
             }
-            try fm.copyItem(at: sourceURL, to: targetURL)
+
+            let stagingURL = vaultSkillsDir.appendingPathComponent(".agymg_fork_\(UUID().uuidString)")
+            do {
+                try fm.copyItem(at: sourceURL, to: stagingURL)
+                if fm.fileExists(atPath: targetURL.path) {
+                    try fm.removeItem(at: targetURL)
+                }
+                try fm.moveItem(at: stagingURL, to: targetURL)
+            } catch {
+                try? fm.removeItem(at: stagingURL)
+                throw error
+            }
 
             var newSkill = skill
             newSkill.origin = .vault

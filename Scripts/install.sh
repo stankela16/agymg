@@ -74,7 +74,10 @@ if pgrep -f "$DEST_APP/Contents/MacOS/agymg" >/dev/null 2>&1; then
 fi
 rm -rf "$DEST_APP"
 ditto "$WORK_ROOT/agymg.app" "$DEST_APP"
-xattr -dr com.apple.quarantine "$DEST_APP" 2>/dev/null || true
+xattr -cr "$DEST_APP" 2>/dev/null || true
+if ! codesign --verify --deep --strict "$DEST_APP" >/dev/null 2>&1; then
+  codesign --force --deep --sign - --timestamp=none "$DEST_APP"
+fi
 rm -rf "$WORK_ROOT/agymg.app" "$WORK_ROOT/agymg.zip"
 
 is_brew_cellar_link() {

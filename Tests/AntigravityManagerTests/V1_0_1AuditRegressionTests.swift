@@ -517,4 +517,385 @@ final class V1_0_1AuditRegressionTests: XCTestCase {
         let backupItems = (try? fm.contentsOfDirectory(atPath: conflictBackupsDir.path)) ?? []
         XCTAssertFalse(backupItems.isEmpty, "Conflicting Claude skill content must be backed up before symlink replacement")
     }
+
+    // MARK: - Challenger Regression 1: syncProject never deletes untracked or non-git physical plugin folders
+    func testProjectSyncNeverDeletesUntrackedOrNonGitPhysicalPluginDirectory() async throws {
+        let vaultPluginDir = PathConstants.vaultPluginsDirectory.appendingPathComponent("linked-plug", isDirectory: true)
+        try fm.createDirectory(at: vaultPluginDir, withIntermediateDirectories: true)
+        try "{\"name\":\"linked-plug\"}".write(to: vaultPluginDir.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        let linkedDef = PluginDefinition(id: "linked-plug", name: "linked-plug", description: "d", path: vaultPluginDir.path, hasMCP: false, hasSkills: false)
+
+        // 1. Non-git workspace with a physical plugin folder
+        let nonGitDir = sandboxDir.appendingPathComponent("Projects/non-git-plug-proj", isDirectory: true)
+        let physicalNonGitPlugin = nonGitDir.appendingPathComponent(".agents/plugins/local-authoring-plug", isDirectory: true)
+        try fm.createDirectory(at: physicalNonGitPlugin, withIntermediateDirectories: true)
+        try "{\"name\":\"local-authoring-plug\"}".write(to: physicalNonGitPlugin.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        let localDef = PluginDefinition(id: "local-authoring-plug", name: "local-authoring-plug", description: "d", path: physicalNonGitPlugin.path, hasMCP: false, hasSkills: false)
+
+        // Also place a symlinked Vault plugin that should be removed when disabled
+        let symlinkedTarget = nonGitDir.appendingPathComponent(".agents/plugins/linked-plug")
+        try fm.createSymbolicLink(at: symlinkedTarget, withDestinationURL: vaultPluginDir)
+
+        let nonGitProfile = ProjectProfile(id: "non-git-plug-proj", name: "non-git-plug-proj", path: nonGitDir.path, enabledPluginIds: [])
+        try await syncEngine.syncProject(project: nonGitProfile, allServers: [], allSkills: [], allPlugins: [linkedDef, localDef])
+
+        XCTAssertTrue(fm.fileExists(atPath: physicalNonGitPlugin.appendingPathComponent("plugin.json").path), "Physical plugin directory in non-git project must never be deleted")
+        let isLocalSymlink = await syncEngine.isSymlink(at: physicalNonGitPlugin)
+        XCTAssertFalse(isLocalSymlink)
+        let isLinkedStillPresent = await syncEngine.isSymlink(at: symlinkedTarget)
+        XCTAssertFalse(isLinkedStillPresent, "Disabled Vault plugin symlink must be removed")
+
+        // 2. Git repository with an untracked (not yet git-added) physical plugin folder
+        let gitDir = sandboxDir.appendingPathComponent("Projects/git-untracked-plug-proj", isDirectory: true)
+        let untrackedPlugin = gitDir.appendingPathComponent(".agents/plugins/untracked-plug", isDirectory: true)
+        try fm.createDirectory(at: gitDir.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: untrackedPlugin, withIntermediateDirectories: true)
+        try "{\"name\":\"untracked-plug\"}".write(to: untrackedPlugin.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        let untrackedDef = PluginDefinition(id: "untracked-plug", name: "untracked-plug", description: "d", path: untrackedPlugin.path, hasMCP: false, hasSkills: false)
+
+        let gitProfile = ProjectProfile(id: "git-untracked-plug-proj", name: "git-untracked-plug-proj", path: gitDir.path, enabledPluginIds: [])
+        try await syncEngine.syncProject(project: gitProfile, allServers: [], allSkills: [], allPlugins: [untrackedDef])
+
+        XCTAssertTrue(fm.fileExists(atPath: untrackedPlugin.appendingPathComponent("plugin.json").path), "Untracked physical plugin directory in git repo must never be deleted")
+    }
+
+    // MARK: - Challenger Regression 2: Home/TCC container roots are never scanned by inspectStack & relative CLI paths resolve cleanly
+    func testHookSessionStartAndInspectStackSkipHomeContainersAndResolveRelativePaths() async throws {
+        // Seed fake TCC subfolders inside effectiveHomeDirectory (sandboxDir) with Swift markers
+        for container in ["Desktop", "Documents", "Downloads", "Library"] {
+            let nestedApp = sandboxDir.appendingPathComponent("\(container)/secret-app", isDirectory: true)
+            try fm.createDirectory(at: nestedApp, withIntermediateDirectories: true)
+            try "// swift-tools-version: 6.0\n// .macOS(.v14)\n".write(
+                to: nestedApp.appendingPathComponent("Package.swift"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let recService = ProjectRecommendationService()
+        let homeStack = recService.inspectStack(at: sandboxDir.path)
+        XCTAssertFalse(homeStack.hasSwiftPackage, "inspectStack must not enumerate home root or descend into Desktop/Documents/Downloads/Library")
+        let desktopStack = recService.inspectStack(at: sandboxDir.appendingPathComponent("Desktop").path)
+        XCTAssertFalse(desktopStack.hasSwiftPackage, "inspectStack must not enumerate Desktop container root")
+
+        // Running hook-session-start in ~ (sandboxDir) must succeed with empty stack labels
+        let homeHook = await CLIRunner.execute(
+            arguments: ["agymg", "hook-session-start", "--format", "claude-text"],
+            currentDirectoryPath: sandboxDir.path
+        )
+        XCTAssertEqual(homeHook.exitCode, 0)
+
+        // Running brief --project . inside a real Swift repository must normalize '.' against currentDirectoryPath
+        let relRepo = sandboxDir.appendingPathComponent("Projects/rel-swift-app", isDirectory: true)
+        try fm.createDirectory(at: relRepo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try "// swift-tools-version: 6.0\n// .macOS(.v14)\n".write(
+            to: relRepo.appendingPathComponent("Package.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let briefRes = await CLIRunner.execute(
+            arguments: ["agymg", "brief", "--project", ".", "--json"],
+            currentDirectoryPath: relRepo.path
+        )
+        XCTAssertEqual(briefRes.exitCode, 0, "brief --project . failed: \(briefRes.stderr)")
+        let briefData = try XCTUnwrap(briefRes.stdout.data(using: .utf8))
+        let briefJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: briefData) as? [String: Any])
+        let projSection = try XCTUnwrap(briefJSON["project"] as? [String: Any])
+        let returnedPath = try XCTUnwrap(projSection["path"] as? String)
+        XCTAssertEqual(
+            URL(fileURLWithPath: returnedPath).resolvingSymlinksInPath().path,
+            relRepo.resolvingSymlinksInPath().path
+        )
+        let stackLabels = (projSection["stackLabels"] as? [String]) ?? []
+        XCTAssertFalse(stackLabels.isEmpty, "Relative --project . must inspect Swift stack at relRepo")
+    }
+
+    // MARK: - Challenger Regression 3: Bootstrap adopts physical global plugins & initializeVaultIfNeeded tightens 0644 files
+    func testBootstrapAdoptsGlobalPluginsAndInitializeTightensExistingPermissions() async throws {
+        let globalPlugin = PathConstants.globalPluginsDirectory.appendingPathComponent("starter-plugin", isDirectory: true)
+        try fm.createDirectory(at: globalPlugin, withIntermediateDirectories: true)
+        try "{\"name\":\"starter-plugin\"}".write(to: globalPlugin.appendingPathComponent("plugin.json"), atomically: true, encoding: .utf8)
+        let pluginMCP: [String: Any] = [
+            "mcpServers": [
+                "bundled-srv": ["command": "node", "args": ["srv.js"]]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: pluginMCP).write(to: globalPlugin.appendingPathComponent("mcp_config.json"))
+
+        let vault = VaultService()
+        await vault.initializeVaultIfNeeded()
+
+        let isPluginLink = await syncEngine.isSymlink(at: globalPlugin)
+        XCTAssertTrue(isPluginLink, "Bootstrap must convert physical global plugin into a symlink to Vault")
+        XCTAssertTrue(fm.fileExists(atPath: PathConstants.vaultPluginsDirectory.appendingPathComponent("starter-plugin/plugin.json").path))
+
+        let selection = await vault.loadGlobalSelection()
+        XCTAssertTrue(selection.enabledPluginIds.contains("starter-plugin"))
+        let servers = await vault.loadServers()
+        XCTAssertTrue(servers.contains(where: { $0.id == "bundled-srv" }))
+
+        // Simulate upgrading from v1.0.0 where Vault manifests had 0o644 permissions
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: PathConstants.vaultMCPFile.path)
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: PathConstants.vaultGlobalConfigFile.path)
+
+        await vault.initializeVaultIfNeeded()
+
+        let mcpPerms = (try fm.attributesOfItem(atPath: PathConstants.vaultMCPFile.path)[.posixPermissions] as? Int) ?? 0
+        let globalSelPerms = (try fm.attributesOfItem(atPath: PathConstants.vaultGlobalConfigFile.path)[.posixPermissions] as? Int) ?? 0
+        XCTAssertEqual(mcpPerms & 0o777, 0o600)
+        XCTAssertEqual(globalSelPerms & 0o777, 0o600)
+    }
+
+    // MARK: - Challenger Regression 4: uninstall --restore removes dangling Vault symlinks across symlinked profile & cleans Gemini hooks
+    func testUninstallRestoreCleansDanglingVaultSymlinksUnderSymlinkedProfileAndGeminiHooks() async throws {
+        let profileRoot = fm.temporaryDirectory.appendingPathComponent("ProfileReal_\(UUID().uuidString)", isDirectory: true)
+        let aliasHome = fm.temporaryDirectory.appendingPathComponent("AliasHome_\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? fm.removeItem(at: profileRoot)
+            try? fm.removeItem(at: aliasHome)
+            PathConstants.customGeminiDirectory = sandboxDir.appendingPathComponent(".gemini", isDirectory: true)
+        }
+
+        let realGemini = profileRoot.appendingPathComponent(".gemini", isDirectory: true)
+        try fm.createDirectory(at: realGemini.appendingPathComponent("manager-vault/skills"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: aliasHome.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
+        let aliasGemini = aliasHome.appendingPathComponent(".gemini")
+        try fm.createSymbolicLink(at: aliasGemini, withDestinationURL: realGemini)
+
+        PathConstants.customGeminiDirectory = aliasGemini
+        let vault = VaultService()
+        await vault.initializeVaultIfNeeded()
+
+        // Create a dangling symlink pointing to a deleted skill inside aliasGemini/manager-vault/skills/ghost-skill
+        let ghostTarget = aliasGemini.appendingPathComponent("manager-vault/skills/ghost-skill")
+        let danglingLink = PathConstants.claudeGlobalSkillsDirectory.appendingPathComponent("ghost-skill")
+        try fm.createSymbolicLink(at: danglingLink, withDestinationURL: ghostTarget)
+        let wasLinkBefore = await syncEngine.isSymlink(at: danglingLink)
+        XCTAssertTrue(wasLinkBefore)
+
+        // Seed hook-session-start in ~/.gemini/settings.json alongside a user hook
+        let geminiHooks: [String: Any] = [
+            "hooks": [
+                "SessionStart": [
+                    [
+                        "hooks": [
+                            ["type": "command", "command": "/opt/homebrew/bin/agymg hook-session-start"],
+                            ["type": "command", "command": "echo keep-gemini-hook"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: geminiHooks, options: [.prettyPrinted]).write(to: PathConstants.geminiSettingsFile)
+
+        let result = await CLIRunner.execute(arguments: ["agymg", "uninstall", "--restore", "--json"])
+        XCTAssertEqual(result.exitCode, 0, "uninstall --restore failed: \(result.stderr)")
+
+        let isStillLinkAfter = await syncEngine.isSymlink(at: danglingLink)
+        XCTAssertFalse(isStillLinkAfter, "Dangling Vault symlink under symlinked .gemini profile must be cleaned")
+
+        let geminiSettingsStr = try String(contentsOf: PathConstants.geminiSettingsFile, encoding: .utf8)
+        XCTAssertFalse(geminiSettingsStr.contains("hook-session-start"))
+        XCTAssertTrue(geminiSettingsStr.contains("keep-gemini-hook"))
+    }
+
+    // MARK: - Challenger Regression 5: Concurrent mcp-oauth-headers.py execution refreshes once, enforces 0600, cleans cache & blocks unsafe token_url
+    func testConcurrentMCPOAuthHelperRefreshesOnceEnforces0600CleansCacheAndBlocksUnsafeTokenURL() throws {
+        let helperURL = sandboxDir.appendingPathComponent("mcp-oauth-headers.py")
+        try SyncEngine.mcpOAuthHeadersScriptContent.write(to: helperURL, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helperURL.path)
+
+        // Spin up a local 127.0.0.1 Python HTTP mock OAuth token endpoint on an ephemeral port
+        let portFile = sandboxDir.appendingPathComponent("mock_port.txt")
+        let countFile = sandboxDir.appendingPathComponent("refresh_count.txt")
+        let mockServerScript = sandboxDir.appendingPathComponent("mock_oauth_server.py")
+        let mockPy = """
+        import http.server, json, sys, time
+
+        port_file, count_file = sys.argv[1], sys.argv[2]
+        counter = 0
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                global counter
+                length = int(self.headers.get("Content-Length", "0"))
+                _ = self.rfile.read(length)
+                time.sleep(0.05)
+                counter += 1
+                with open(count_file, "w") as f:
+                    f.write(str(counter))
+                body = json.dumps({
+                    "access_token": "fresh_tok_concurrent_999",
+                    "refresh_token": "rotated_ref_999",
+                    "token_type": "Bearer",
+                    "expires_in": 3600
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, format, *args):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        with open(port_file, "w") as f:
+            f.write(str(srv.server_address[1]))
+        srv.serve_forever()
+        """
+        try mockPy.write(to: mockServerScript, atomically: true, encoding: .utf8)
+
+        let serverProc = Process()
+        serverProc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        serverProc.arguments = [mockServerScript.path, portFile.path, countFile.path]
+        serverProc.standardOutput = FileHandle.nullDevice
+        serverProc.standardError = FileHandle.nullDevice
+        try serverProc.run()
+        defer { serverProc.terminate() }
+
+        var portString = ""
+        for _ in 0..<50 {
+            if let str = try? String(contentsOf: portFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+               !str.isEmpty {
+                portString = str
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertFalse(portString.isEmpty, "Mock OAuth HTTP server failed to bind")
+
+        let oauthFile = PathConstants.engineMCPOAuthTokensFile
+        try fm.createDirectory(at: oauthFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let expiredPayload: [String: Any] = [
+            "https://api.mobbin.com/mcp": [
+                "client_id": "test-client",
+                "token_url": "http://127.0.0.1:\(portString)/oauth/token",
+                "token": [
+                    "access_token": "expired_old_tok",
+                    "refresh_token": "valid_ref_tok",
+                    "expiry": "2020-01-01T00:00:00Z"
+                ]
+            ],
+            "https://unsafe-file.example.com/mcp": [
+                "token_url": "file:///etc/passwd",
+                "token": [
+                    "access_token": "",
+                    "refresh_token": "ref_1",
+                    "expiry": "2020-01-01T00:00:00Z"
+                ]
+            ],
+            "https://unsafe-http.example.com/mcp": [
+                "token_url": "http://evil.example.com/oauth/token",
+                "token": [
+                    "access_token": "",
+                    "refresh_token": "ref_2",
+                    "expiry": "2020-01-01T00:00:00Z"
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: expiredPayload, options: [.prettyPrinted]).write(to: oauthFile)
+        try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: oauthFile.path)
+
+        let cacheFile = PathConstants.claudeDirectory.appendingPathComponent("mcp-needs-auth-cache.json")
+        try fm.createDirectory(at: cacheFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [
+            "mobbin": ["timestamp": 1],
+            "keep-other": ["timestamp": 2]
+        ]).write(to: cacheFile)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheFile.path)
+
+        // Spawn 6 parallel helper processes against the expired token
+        var procs: [(Process, Pipe)] = []
+        for _ in 0..<6 {
+            let p = Process()
+            let pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            p.arguments = [helperURL.path]
+            var env = ProcessInfo.processInfo.environment
+            env["AGYMG_GEMINI_DIR"] = PathConstants.geminiDirectory.path
+            env["CLAUDE_CODE_MCP_OAUTH_FILE"] = oauthFile.path
+            env["CLAUDE_CODE_MCP_SERVER_URL"] = "https://api.mobbin.com/mcp/"
+            env["CLAUDE_CODE_MCP_SERVER_NAME"] = "mobbin"
+            p.environment = env
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            procs.append((p, pipe))
+        }
+
+        for (p, pipe) in procs {
+            let outData = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            XCTAssertEqual(p.terminationStatus, 0)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: outData) as? [String: String])
+            XCTAssertEqual(json["Authorization"], "Bearer fresh_tok_concurrent_999")
+        }
+
+        // Double-checked flock must have refreshed the token exactly once across all 6 parallel processes
+        let refreshCount = try String(contentsOf: countFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(refreshCount, "1", "Double-checked flock must prevent duplicate concurrent token refreshes")
+
+        // Updated oauthFile and cacheFile must both preserve 0o600 permissions
+        let oauthMode = (try fm.attributesOfItem(atPath: oauthFile.path)[.posixPermissions] as? Int) ?? 0
+        let cacheMode = (try fm.attributesOfItem(atPath: cacheFile.path)[.posixPermissions] as? Int) ?? 0
+        XCTAssertEqual(oauthMode & 0o777, 0o600)
+        XCTAssertEqual(cacheMode & 0o777, 0o600)
+
+        let updatedCache = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: cacheFile)) as? [String: Any])
+        XCTAssertNil(updatedCache["mobbin"])
+        XCTAssertNotNil(updatedCache["keep-other"])
+
+        // Unsafe file:// and non-loopback http:// token_urls must be rejected cleanly
+        for unsafeURL in ["https://unsafe-file.example.com/mcp", "https://unsafe-http.example.com/mcp"] {
+            let p = Process()
+            let pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            p.arguments = [helperURL.path]
+            var env = ProcessInfo.processInfo.environment
+            env["AGYMG_GEMINI_DIR"] = PathConstants.geminiDirectory.path
+            env["CLAUDE_CODE_MCP_OAUTH_FILE"] = oauthFile.path
+            env["CLAUDE_CODE_MCP_SERVER_URL"] = unsafeURL
+            p.environment = env
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            try p.run()
+            let outData = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            XCTAssertEqual(p.terminationStatus, 0)
+            XCTAssertEqual(String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), "{}")
+        }
+    }
+
+    // MARK: - Challenger Regression 6: SkillEditorState.forkToVault prevents self-deletion and path traversal
+    @MainActor
+    func testSkillEditorForkToVaultGuardsSelfOverwriteAndUnsafeIds() throws {
+        let vaultSkillDir = PathConstants.vaultSkillsDirectory.appendingPathComponent("already-in-vault", isDirectory: true)
+        try fm.createDirectory(at: vaultSkillDir, withIntermediateDirectories: true)
+        let skillMD = vaultSkillDir.appendingPathComponent("SKILL.md")
+        try "---\nname: already-in-vault\n---\nVault Content".write(to: skillMD, atomically: true, encoding: .utf8)
+
+        let selfSkill = SkillDefinition(
+            id: "already-in-vault",
+            name: "already-in-vault",
+            description: "desc",
+            path: skillMD.path,
+            origin: .projectLocal
+        )
+        let editorState = SkillEditorState(skill: selfSkill)
+        let forked = editorState.forkToVault()
+        XCTAssertNotNil(forked)
+        XCTAssertEqual(forked?.origin, .vault)
+        XCTAssertTrue(fm.fileExists(atPath: skillMD.path), "forkToVault must never delete a skill whose source already resolves to Vault")
+
+        let unsafeSkill = SkillDefinition(
+            id: "../escaped",
+            name: "escaped",
+            description: "desc",
+            path: skillMD.path,
+            origin: .projectLocal
+        )
+        let unsafeEditor = SkillEditorState(skill: unsafeSkill)
+        XCTAssertNil(unsafeEditor.forkToVault(), "forkToVault must reject unsafe skill IDs")
+        XCTAssertFalse(fm.fileExists(atPath: PathConstants.vaultSkillsDirectory.deletingLastPathComponent().appendingPathComponent("escaped").path))
+    }
 }

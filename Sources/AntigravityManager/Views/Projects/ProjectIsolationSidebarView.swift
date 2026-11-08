@@ -130,6 +130,17 @@ public struct ProjectIsolationSidebarView: View {
         )
     }
 
+    private var canRemediateViaSync: Bool {
+        guard audit.pathCheck.status == .passed else { return false }
+        if audit.manifestCheck.status != .passed || audit.symlinkCheck.status != .passed {
+            return true
+        }
+        if !project.enabledMCPServerIds.isEmpty && audit.gitignoreCheck.status != .passed {
+            return true
+        }
+        return false
+    }
+
     private var gitSafetyAuditCard: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             HStack {
@@ -151,7 +162,7 @@ public struct ProjectIsolationSidebarView: View {
                 }
             }
 
-            if audit.overallStatus != .passed {
+            if canRemediateViaSync {
                 Button {
                     state.syncProject(project)
                 } label: {
@@ -166,6 +177,11 @@ public struct ProjectIsolationSidebarView: View {
                 .controlSize(.mini)
                 .padding(.top, DesignTokens.Spacing.xxs)
                 .help("Runs automatic synchronization to update .gitignore rules and reconcile manifests")
+            } else if audit.pathCheck.status == .passed && project.enabledMCPServerIds.isEmpty && audit.gitignoreCheck.status == .warning {
+                Text(".gitignore is untouched until a project MCP server is enabled.")
+                    .font(.system(size: 8.5))
+                    .foregroundStyle(DesignTokens.inkTertiary)
+                    .padding(.top, DesignTokens.Spacing.xxs)
             }
         }
         .padding(DesignTokens.Spacing.sm)

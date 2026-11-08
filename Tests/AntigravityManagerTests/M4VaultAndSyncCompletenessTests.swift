@@ -133,7 +133,7 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
         let secretData = "CONFIDENTIAL_KEY_XYZ".data(using: .utf8)!
         try secretData.write(to: customPluginDir.appendingPathComponent("secret.txt"))
 
-        var project = ProjectProfile(
+        let project = ProjectProfile(
             id: "safe-proj",
             name: "SafeSyncProject",
             path: projectDir.path,
@@ -149,27 +149,35 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
             path: customPluginDir.path
         )
 
-        // Sync with plugin disabled
+        // Sync with plugin disabled: non-destructively copies into Vault while preserving physical project folder (P1 #4)
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [], allPlugins: [pluginDef])
 
-        // Verify that customPluginDir was removed from the project folder
-        XCTAssertFalse(fm.fileExists(atPath: customPluginDir.path), "Disabled plugin should be removed from project plugins folder")
+        XCTAssertTrue(fm.fileExists(atPath: customPluginDir.path), "Physical project plugin folder must never be deleted (P1 #4)")
 
-        // Verify that the plugin was safely backed up to Master Vault before deletion
+        // Verify that the plugin was safely backed up to Master Vault
         let vaultPluginDir = PathConstants.vaultPluginsDirectory.appendingPathComponent("safe-plugin")
         XCTAssertTrue(fm.fileExists(atPath: vaultPluginDir.path), "Disabled plugin must be preserved in Master Vault")
         let restoredSecret = try String(contentsOf: vaultPluginDir.appendingPathComponent("secret.txt"), encoding: .utf8)
         XCTAssertEqual(restoredSecret, "CONFIDENTIAL_KEY_XYZ")
 
-        // Now re-enable the plugin
-        project.enabledPluginIds.insert("safe-plugin")
-        try await syncEngine.syncProject(project: project, allServers: [], allSkills: [], allPlugins: [pluginDef])
+        // Enable the Vault-backed plugin on a second workspace and verify symlink creation
+        let consumerDir = testSandboxDir.appendingPathComponent("Projects/SafeSyncConsumer", isDirectory: true)
+        try fm.createDirectory(at: consumerDir, withIntermediateDirectories: true)
+        let consumerPluginURL = consumerDir.appendingPathComponent(".agents/plugins/safe-plugin")
+        let consumerProj = ProjectProfile(
+            id: "safe-consumer",
+            name: "SafeSyncConsumer",
+            path: consumerDir.path,
+            enabledMCPServerIds: [],
+            enabledSkillIds: [],
+            enabledPluginIds: ["safe-plugin"]
+        )
+        try await syncEngine.syncProject(project: consumerProj, allServers: [], allSkills: [], allPlugins: [pluginDef])
 
-        // Verify that it is now a symlink pointing to Vault
-        XCTAssertTrue(fm.fileExists(atPath: customPluginDir.path))
-        let isSym = await syncEngine.isSymlink(at: customPluginDir)
-        XCTAssertTrue(isSym, "Re-enabled plugin in project must be a symlink to Master Vault")
-        let destination = try fm.destinationOfSymbolicLink(atPath: customPluginDir.path)
+        XCTAssertTrue(fm.fileExists(atPath: consumerPluginURL.path))
+        let isSym = await syncEngine.isSymlink(at: consumerPluginURL)
+        XCTAssertTrue(isSym, "Enabled plugin in consumer project must be a symlink to Master Vault")
+        let destination = try fm.destinationOfSymbolicLink(atPath: consumerPluginURL.path)
         XCTAssertEqual(destination, vaultPluginDir.path)
     }
 

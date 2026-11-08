@@ -38,6 +38,11 @@ public actor VaultService {
         }
         _ = Darwin.chmod(vaultDir.path, 0o700)
 
+        let vaultBackupsDir = PathConstants.vaultBackupsDirectory
+        if fm.fileExists(atPath: vaultBackupsDir.path) {
+            _ = Darwin.chmod(vaultBackupsDir.path, 0o700)
+        }
+
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
         if !fm.fileExists(atPath: vaultPluginsDir.path) {
             try? fm.createDirectory(at: vaultPluginsDir, withIntermediateDirectories: true)
@@ -46,6 +51,20 @@ public actor VaultService {
         let vaultSkillsDir = PathConstants.vaultSkillsDirectory
         if !fm.fileExists(atPath: vaultSkillsDir.path) {
             try? fm.createDirectory(at: vaultSkillsDir, withIntermediateDirectories: true)
+        }
+
+        // Tighten permissions on pre-existing Vault & global MCP manifests (e.g. when upgrading from v1.0.0)
+        for sensitiveFile in [
+            PathConstants.vaultMCPFile,
+            PathConstants.vaultProjectsFile,
+            PathConstants.vaultGlobalConfigFile,
+            PathConstants.activeContextFile,
+            PathConstants.globalMCPConfigFile
+        ] {
+            let resolved = sensitiveFile.resolvingSymlinksInPath()
+            if fm.fileExists(atPath: resolved.path) {
+                _ = Darwin.chmod(resolved.path, 0o600)
+            }
         }
 
         // Bootstrap master MCP from global config and project plugins if vault MCP file doesn't exist yet
@@ -58,6 +77,7 @@ public actor VaultService {
         var masterServers: [String: MCPServerDefinition] = [:]
         var initialGlobalServerIds: Set<String> = []
         var initialGlobalSkillIds: Set<String> = []
+        var initialGlobalPluginIds: Set<String> = []
 
         // 1. Read existing global mcp_config.json
         if fm.fileExists(atPath: PathConstants.globalMCPConfigFile.path) {
@@ -146,6 +166,51 @@ public actor VaultService {
             }
         }
 
+        // 3b. Bootstrap existing global plugins from Antigravity (~/.gemini/config/plugins)
+        if let pluginItems = try? fm.contentsOfDirectory(at: PathConstants.globalPluginsDirectory, includingPropertiesForKeys: [.isDirectoryKey], options: []) {
+            for item in pluginItems where item.lastPathComponent != "agy-manager" && !item.lastPathComponent.hasPrefix(".") {
+                let pluginId = item.lastPathComponent
+                guard PathConstants.isSafeResourceId(pluginId) else { continue }
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                let isLink = (try? fm.destinationOfSymbolicLink(atPath: item.path)) != nil
+                let destURL = PathConstants.vaultPluginsDirectory.appendingPathComponent(pluginId, isDirectory: true)
+                if !isLink {
+                    if !fm.fileExists(atPath: destURL.path) {
+                        if (try? fm.moveItem(at: item, to: destURL)) != nil {
+                            try? fm.createSymbolicLink(at: item, withDestinationURL: destURL)
+                        } else if (try? fm.copyItem(at: item, to: destURL)) != nil {
+                            try? fm.removeItem(at: item)
+                            try? fm.createSymbolicLink(at: item, withDestinationURL: destURL)
+                        }
+                    } else {
+                        let conflictDir = PathConstants.vaultBackupsDirectory
+                            .appendingPathComponent("bootstrap-plugin-conflicts", isDirectory: true)
+                        try? fm.createDirectory(at: conflictDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                        _ = Darwin.chmod(conflictDir.path, 0o700)
+                        let backupDest = conflictDir.appendingPathComponent("\(pluginId)_\(UUID().uuidString.prefix(8))")
+                        if (try? fm.moveItem(at: item, to: backupDest)) != nil {
+                            try? fm.createSymbolicLink(at: item, withDestinationURL: destURL)
+                        }
+                    }
+                }
+                if fm.fileExists(atPath: destURL.path) || isLink {
+                    initialGlobalPluginIds.insert(pluginId)
+                    let pluginMCPFile = destURL.appendingPathComponent("mcp_config.json")
+                    if let data = try? Data(contentsOf: pluginMCPFile),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let servers = json["mcpServers"] as? [String: Any] {
+                        for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) && masterServers[id] == nil {
+                            if let rawDict = rawValue as? [String: Any] {
+                                let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
+                                masterServers[id] = MCPServerDefinition(id: id, config: jsonDict)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 4. Discover servers from project plugins and project-scoped configs when authorized
         if ProjectFolderAccessManager.shared.isAuthorized {
             let scanner = ProjectScannerService()
@@ -179,7 +244,11 @@ public actor VaultService {
         saveServers(Array(masterServers.values))
 
         // Save initial global selection
-        saveGlobalSelection(GlobalSelection(enabledMCPServerIds: initialGlobalServerIds, enabledSkillIds: initialGlobalSkillIds))
+        saveGlobalSelection(GlobalSelection(
+            enabledMCPServerIds: initialGlobalServerIds,
+            enabledSkillIds: initialGlobalSkillIds,
+            enabledPluginIds: initialGlobalPluginIds
+        ))
     }
 
     public func loadServers() -> [MCPServerDefinition] {
