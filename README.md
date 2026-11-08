@@ -66,10 +66,10 @@ curl -fsSL https://raw.githubusercontent.com/stankela16/agymg/main/Scripts/insta
 
 This installs `/Applications/agymg.app` and links the `agymg` CLI into `/opt/homebrew/bin/agymg` (or `/usr/local/bin` / `~/.local/bin`).
 
-### Option 2 — Homebrew Tap
+### Option 2 — Homebrew
 
 ```bash
-brew tap stankela16/tap
+brew tap stankela16/agymg https://github.com/stankela16/agymg
 brew install agymg
 agymg install-app
 ```
