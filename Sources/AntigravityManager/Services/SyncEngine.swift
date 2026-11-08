@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public actor SyncEngine {
     private let fm = FileManager.default
@@ -59,7 +60,8 @@ public actor SyncEngine {
             return nil
         }
 
-        try? fm.createDirectory(at: backupsDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: backupsDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        _ = Darwin.chmod(backupsDir.path, 0o700)
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -75,7 +77,8 @@ public actor SyncEngine {
         }
 
         do {
-            try fm.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: snapshotDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            _ = Darwin.chmod(snapshotDir.path, 0o700)
         } catch {
             return nil
         }
@@ -84,6 +87,7 @@ public actor SyncEngine {
         for item in existingSources {
             let dst = snapshotDir.appendingPathComponent(item.filename)
             if (try? fm.copyItem(at: item.url, to: dst)) != nil {
+                _ = Darwin.chmod(dst.path, 0o600)
                 copiedFiles.append(item.filename)
             }
         }
@@ -93,8 +97,8 @@ public actor SyncEngine {
             "trigger": force ? "manual" : "pre-first-sync",
             "files": copiedFiles
         ]
-        if let metaData = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys]) {
-            try? metaData.write(to: snapshotDir.appendingPathComponent("manifest.json"), options: .atomic)
+        if let metaData = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+            try? PathConstants.writeSecureData(metaData, to: snapshotDir.appendingPathComponent("manifest.json"), permissions: 0o600)
         }
 
         // Retain up to 10 snapshots (always preserving the initial pre-first-sync backup)
@@ -141,12 +145,14 @@ public actor SyncEngine {
 
         let backupFile = globalConfigDir.appendingPathComponent("mcp_config.json.bak")
         if fm.fileExists(atPath: canonicalGlobalFile.path) && !fm.fileExists(atPath: backupFile.path) {
-            try? fm.copyItem(at: canonicalGlobalFile, to: backupFile)
+            if (try? fm.copyItem(at: canonicalGlobalFile, to: backupFile)) != nil {
+                _ = Darwin.chmod(backupFile.path, 0o600)
+            }
         }
 
         var mcpServersDict: [String: [String: Any]] = [:]
 
-        for server in servers {
+        for server in servers where PathConstants.isSafeResourceId(server.id) {
             var rawDict: [String: Any] = server.config.mapValues { $0.toAny() }
             if enabledIds.contains(server.id) {
                 rawDict["disabled"] = false
@@ -163,8 +169,8 @@ public actor SyncEngine {
         }
 
         rootDict["mcpServers"] = mcpServersDict
-        let data = try JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: canonicalGlobalFile, options: .atomic)
+        let data = try JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try PathConstants.writeSecureData(data, to: canonicalGlobalFile, permissions: 0o600)
 
         syncClaudeGlobalConfig(servers: servers, enabledIds: enabledIds)
     }
@@ -176,7 +182,7 @@ public actor SyncEngine {
 
         try fm.createDirectory(at: globalSkillsDir, withIntermediateDirectories: true)
 
-        for skill in allSkills {
+        for skill in allSkills where PathConstants.isSafeResourceId(skill.id) {
             let targetURL = globalSkillsDir.appendingPathComponent(skill.id)
             let vaultSkillURL = vaultSkillsDir.appendingPathComponent(skill.id)
             let sourceURL = fm.fileExists(atPath: vaultSkillURL.path)
@@ -184,8 +190,8 @@ public actor SyncEngine {
                 : URL(fileURLWithPath: skill.path)
 
             if enabledSkillIds.contains(skill.id) {
-                let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                if let symlinkDest {
+                if isSymlink(at: targetURL) {
+                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
                     if symlinkDest != sourceURL.path {
                         try? fm.removeItem(at: targetURL)
                         if fm.fileExists(atPath: sourceURL.path) {
@@ -198,16 +204,12 @@ public actor SyncEngine {
                     }
                 }
             } else {
-                // Remove from global: clean symlinks or physical folders safely backed up in vault
-                if isSymlink(at: targetURL) || (try? fm.destinationOfSymbolicLink(atPath: targetURL.path)) != nil {
+                // Only remove symlinks; if an unadopted physical folder exists and Vault lacks it, move it into Vault rather than deleting.
+                if isSymlink(at: targetURL) {
                     try? fm.removeItem(at: targetURL)
-                } else if fm.fileExists(atPath: targetURL.path) {
-                    if !fm.fileExists(atPath: vaultSkillURL.path) {
-                        try? fm.copyItem(at: targetURL, to: vaultSkillURL)
-                    }
-                    if fm.fileExists(atPath: vaultSkillURL.path) {
-                        try? fm.removeItem(at: targetURL)
-                    }
+                } else if fm.fileExists(atPath: targetURL.path) && !fm.fileExists(atPath: vaultSkillURL.path) {
+                    try? fm.createDirectory(at: vaultSkillsDir, withIntermediateDirectories: true)
+                    try? fm.moveItem(at: targetURL, to: vaultSkillURL)
                 }
             }
         }
@@ -222,7 +224,7 @@ public actor SyncEngine {
 
         try fm.createDirectory(at: globalPluginsDir, withIntermediateDirectories: true)
 
-        for plugin in allPlugins {
+        for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) {
             let targetURL = globalPluginsDir.appendingPathComponent(plugin.id)
             let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
             let sourceURL = fm.fileExists(atPath: vaultPluginURL.path)
@@ -230,8 +232,8 @@ public actor SyncEngine {
                 : URL(fileURLWithPath: plugin.path)
 
             if enabledPluginIds.contains(plugin.id) {
-                let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                if let symlinkDest {
+                if isSymlink(at: targetURL) {
+                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
                     if symlinkDest != sourceURL.path {
                         try? fm.removeItem(at: targetURL)
                         if fm.fileExists(atPath: sourceURL.path) {
@@ -244,15 +246,11 @@ public actor SyncEngine {
                     }
                 }
             } else {
-                if isSymlink(at: targetURL) || (try? fm.destinationOfSymbolicLink(atPath: targetURL.path)) != nil {
+                if isSymlink(at: targetURL) {
                     try? fm.removeItem(at: targetURL)
-                } else if fm.fileExists(atPath: targetURL.path) {
-                    if !fm.fileExists(atPath: vaultPluginURL.path) {
-                        try? fm.copyItem(at: targetURL, to: vaultPluginURL)
-                    }
-                    if fm.fileExists(atPath: vaultPluginURL.path) {
-                        try? fm.removeItem(at: targetURL)
-                    }
+                } else if fm.fileExists(atPath: targetURL.path) && !fm.fileExists(atPath: vaultPluginURL.path) {
+                    try? fm.createDirectory(at: vaultPluginsDir, withIntermediateDirectories: true)
+                    try? fm.moveItem(at: targetURL, to: vaultPluginURL)
                 }
             }
         }
@@ -261,6 +259,14 @@ public actor SyncEngine {
     }
 
     // MARK: - Claude Sync Helpers
+    public static func normalizeServerURL(_ url: String) -> String {
+        var trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+        return trimmed
+    }
+
     public func loadOAuthTokens() -> [String: String] {
         let oauthFile = PathConstants.engineMCPOAuthTokensFile.resolvingSymlinksInPath()
         guard let data = try? Data(contentsOf: oauthFile),
@@ -278,7 +284,30 @@ public actor SyncEngine {
         return result
     }
 
-    public func convertToClaudeMCPConfig(_ rawDict: [String: Any]) -> [String: Any] {
+    public func loadOAuthServerURLs() -> Set<String> {
+        let oauthFile = PathConstants.engineMCPOAuthTokensFile.resolvingSymlinksInPath()
+        guard let data = try? Data(contentsOf: oauthFile),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else {
+            return []
+        }
+        var urls: Set<String> = []
+        for (rawURL, entry) in dict {
+            let normalized = Self.normalizeServerURL(rawURL)
+            guard !normalized.isEmpty,
+                  let tokenObj = entry["token"] as? [String: Any] else { continue }
+            let access = (tokenObj["access_token"] as? String) ?? ""
+            let refresh = (tokenObj["refresh_token"] as? String) ?? ""
+            if !access.isEmpty || !refresh.isEmpty {
+                urls.insert(normalized)
+            }
+        }
+        return urls
+    }
+
+    public func convertToClaudeMCPConfig(
+        _ rawDict: [String: Any],
+        oauthServerURLs: Set<String>? = nil
+    ) -> [String: Any] {
         var converted = rawDict
         converted.removeValue(forKey: "disabled")
 
@@ -294,9 +323,17 @@ public actor SyncEngine {
                 converted.removeValue(forKey: "headers")
             }
 
-            converted["headersHelper"] = PathConstants.claudeMCPOAuthHelperScript.path
+            let hasStaticAuth = headers.keys.contains { $0.caseInsensitiveCompare("Authorization") == .orderedSame }
+            let activeOAuthURLs = oauthServerURLs ?? loadOAuthServerURLs()
+            let normalizedURL = Self.normalizeServerURL(serverUrl)
+            if !hasStaticAuth && activeOAuthURLs.contains(normalizedURL) {
+                converted["headersHelper"] = PathConstants.claudeMCPOAuthHelperScript.path
+            } else {
+                converted.removeValue(forKey: "headersHelper")
+            }
         } else if converted["command"] != nil {
             converted["type"] = "stdio"
+            converted.removeValue(forKey: "headersHelper")
         }
         return converted
     }
@@ -311,46 +348,48 @@ public actor SyncEngine {
             try? Self.mcpOAuthHeadersScriptContent.write(to: helperScript, atomically: true, encoding: .utf8)
         }
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperScript.path)
+    }
 
-        // Ensure ~/.claude/settings.json auto-approves project MCPs. Plugins and claude.ai connectors stay the user's choice.
-        let settingsFile = PathConstants.claudeSettingsFile.resolvingSymlinksInPath()
-        var settingsDict: [String: Any] = [:]
-        if let existingData = try? Data(contentsOf: settingsFile),
-           let existingJSON = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any] {
-            settingsDict = existingJSON
-        }
-        var settingsChanged = false
-        if (settingsDict["enableAllProjectMcpServers"] as? Bool) != true {
-            settingsDict["enableAllProjectMcpServers"] = true
-            settingsChanged = true
-        }
-        if settingsChanged,
-           let data = try? JSONSerialization.data(withJSONObject: settingsDict, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: settingsFile, options: .atomic)
-        }
-
-        // Clear stale mcp-needs-auth-cache.json across primary and profile homes
+    public func clearStaleNeedsAuthCache(forServerIds oauthServerIds: Set<String>) {
+        guard !oauthServerIds.isEmpty else { return }
         for cacheFile in PathConstants.allClaudeNeedsAuthCacheFiles {
-            if fm.fileExists(atPath: cacheFile.path) {
-                try? "{}".write(to: cacheFile, atomically: true, encoding: .utf8)
+            guard fm.fileExists(atPath: cacheFile.path),
+                  let data = try? Data(contentsOf: cacheFile),
+                  var dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
             }
+            var changed = false
+            for serverId in oauthServerIds where dict.removeValue(forKey: serverId) != nil {
+                changed = true
+            }
+            guard changed,
+                  let updatedData = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .withoutEscapingSlashes]) else {
+                continue
+            }
+            try? PathConstants.writeSecureData(updatedData, to: cacheFile, permissions: 0o600, preserveExistingPermissions: true)
         }
     }
 
     public func syncClaudeGlobalConfig(servers: [MCPServerDefinition], enabledIds: Set<String>) {
         let claudeDir = PathConstants.claudeDirectory
         try? fm.createDirectory(at: claudeDir, withIntermediateDirectories: true)
-        ensureClaudeEnvironment()
 
-        // Ensure ~/.claude/CLAUDE.md points to ~/.gemini/GEMINI.md
-        let geminiMd = PathConstants.geminiGlobalMemoryFile.resolvingSymlinksInPath()
-        let claudeMd = PathConstants.claudeGlobalMemoryFile
-        if fm.fileExists(atPath: geminiMd.path) {
-            let currentDest = try? fm.destinationOfSymbolicLink(atPath: claudeMd.path)
-            if currentDest != geminiMd.path {
-                try? fm.removeItem(at: claudeMd)
-                try? fm.createSymbolicLink(at: claudeMd, withDestinationURL: geminiMd)
+        let oauthURLs = loadOAuthServerURLs()
+        var oauthBackedIds: Set<String> = []
+        var claudeServers: [String: Any] = [:]
+
+        for server in servers where PathConstants.isSafeResourceId(server.id) && enabledIds.contains(server.id) {
+            let raw = server.config.mapValues { $0.toAny() }
+            let converted = convertToClaudeMCPConfig(raw, oauthServerURLs: oauthURLs)
+            if converted["headersHelper"] != nil {
+                oauthBackedIds.insert(server.id)
             }
+            claudeServers[server.id] = converted
+        }
+
+        if !oauthBackedIds.isEmpty {
+            ensureClaudeEnvironment()
+            clearStaleNeedsAuthCache(forServerIds: oauthBackedIds)
         }
 
         for configFile in PathConstants.allClaudeConfigFiles {
@@ -361,17 +400,11 @@ public actor SyncEngine {
                 rootDict = existingJSON
             }
 
-            var claudeServers: [String: Any] = [:]
-            for server in servers where enabledIds.contains(server.id) {
-                let raw = server.config.mapValues { $0.toAny() }
-                claudeServers[server.id] = convertToClaudeMCPConfig(raw)
-            }
-
             // Claude Code writes this file constantly, so touch it only when there is a real change.
             guard (rootDict["mcpServers"] as? NSDictionary) != (claudeServers as NSDictionary) else { continue }
             rootDict["mcpServers"] = claudeServers
-            if let data = try? JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys]) {
-                try? data.write(to: claudeConfigURL, options: .atomic)
+            if let data = try? JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+                try? PathConstants.writeSecureData(data, to: claudeConfigURL, permissions: 0o600, preserveExistingPermissions: true)
             }
         }
     }
@@ -381,7 +414,7 @@ public actor SyncEngine {
         let vaultSkillsDir = PathConstants.vaultSkillsDirectory
         try? fm.createDirectory(at: claudeSkillsDir, withIntermediateDirectories: true)
 
-        for skill in allSkills {
+        for skill in allSkills where PathConstants.isSafeResourceId(skill.id) {
             guard skill.id != "synced" && !skill.id.hasPrefix(".") else { continue }
             let targetURL = claudeSkillsDir.appendingPathComponent(skill.id)
             let vaultSkillURL = vaultSkillsDir.appendingPathComponent(skill.id)
@@ -390,8 +423,8 @@ public actor SyncEngine {
                 : URL(fileURLWithPath: skill.path)
 
             if enabledSkillIds.contains(skill.id) {
-                let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                if let symlinkDest {
+                if isSymlink(at: targetURL) {
+                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
                     if symlinkDest != sourceURL.path {
                         try? fm.removeItem(at: targetURL)
                         if fm.fileExists(atPath: sourceURL.path) {
@@ -402,13 +435,13 @@ public actor SyncEngine {
                     try? fm.createSymbolicLink(at: targetURL, withDestinationURL: sourceURL)
                 }
             } else {
-                if isSymlink(at: targetURL) || (try? fm.destinationOfSymbolicLink(atPath: targetURL.path)) != nil {
+                if isSymlink(at: targetURL) {
                     try? fm.removeItem(at: targetURL)
                 }
             }
         }
 
-        // Propagate shared ~/.claude resources (skills, CLAUDE.md, hooks, settings.json, projects, plans) into AntigravityProfiles
+        // Propagate shared ~/.claude resources into AntigravityProfiles without ever deleting real directories or files
         let primaryClaudeDir = PathConstants.claudeDirectory
         for subDir in ["projects", "plans"] {
             try? fm.createDirectory(at: primaryClaudeDir.appendingPathComponent(subDir, isDirectory: true), withIntermediateDirectories: true)
@@ -419,9 +452,13 @@ public actor SyncEngine {
             for item in ["skills", "CLAUDE.md", "hooks", "settings.json", "projects", "plans"] {
                 let srcItem = primaryClaudeDir.appendingPathComponent(item)
                 let dstItem = profClaudeDir.appendingPathComponent(item)
-                guard fm.fileExists(atPath: srcItem.path) || (try? fm.destinationOfSymbolicLink(atPath: srcItem.path)) != nil else { continue }
-                if (try? fm.destinationOfSymbolicLink(atPath: dstItem.path)) != srcItem.path {
-                    try? fm.removeItem(at: dstItem)
+                guard fm.fileExists(atPath: srcItem.path) || isSymlink(at: srcItem) else { continue }
+                if isSymlink(at: dstItem) {
+                    if (try? fm.destinationOfSymbolicLink(atPath: dstItem.path)) != srcItem.path {
+                        try? fm.removeItem(at: dstItem)
+                        try? fm.createSymbolicLink(at: dstItem, withDestinationURL: srcItem)
+                    }
+                } else if !fm.fileExists(atPath: dstItem.path) {
                     try? fm.createSymbolicLink(at: dstItem, withDestinationURL: srcItem)
                 }
             }
@@ -433,25 +470,31 @@ public actor SyncEngine {
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
         try? fm.createDirectory(at: claudeSkillsDir, withIntermediateDirectories: true)
 
+        let oauthURLs = loadOAuthServerURLs()
+        var oauthBackedIds: Set<String> = []
         var pluginClaudeServers: [String: [String: Any]] = [:]
 
-        for plugin in allPlugins {
+        for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) {
             let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
             let sourcePluginURL = fm.fileExists(atPath: vaultPluginURL.path)
                 ? vaultPluginURL
                 : URL(fileURLWithPath: plugin.path)
 
-            // 1. Plugin bundled skills -> ~/.claude/skills/
+            // 1. Plugin bundled skills -> ~/.claude/skills/ (never overwrite real non-symlink directories)
             let pluginSkillsDir = sourcePluginURL.appendingPathComponent("skills", isDirectory: true)
             if let subSkills = try? fm.contentsOfDirectory(at: pluginSkillsDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
                 for subSkillURL in subSkills {
                     let subSkillId = subSkillURL.lastPathComponent
-                    guard subSkillId != "synced" else { continue }
+                    guard PathConstants.isSafeResourceId(subSkillId), subSkillId != "synced" else { continue }
                     let targetURL = claudeSkillsDir.appendingPathComponent(subSkillId)
                     if enabledPluginIds.contains(plugin.id) {
-                        let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                        if symlinkDest != subSkillURL.path {
-                            try? fm.removeItem(at: targetURL)
+                        if isSymlink(at: targetURL) {
+                            let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
+                            if symlinkDest != subSkillURL.path {
+                                try? fm.removeItem(at: targetURL)
+                                try? fm.createSymbolicLink(at: targetURL, withDestinationURL: subSkillURL)
+                            }
+                        } else if !fm.fileExists(atPath: targetURL.path) {
                             try? fm.createSymbolicLink(at: targetURL, withDestinationURL: subSkillURL)
                         }
                     } else {
@@ -468,12 +511,21 @@ public actor SyncEngine {
             if let data = try? Data(contentsOf: pluginMCPFile),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let pluginServers = json["mcpServers"] as? [String: [String: Any]] {
-                for (serverId, rawConfig) in pluginServers {
+                for (serverId, rawConfig) in pluginServers where PathConstants.isSafeResourceId(serverId) {
                     if enabledPluginIds.contains(plugin.id) {
-                        pluginClaudeServers[serverId] = convertToClaudeMCPConfig(rawConfig)
+                        let converted = convertToClaudeMCPConfig(rawConfig, oauthServerURLs: oauthURLs)
+                        if converted["headersHelper"] != nil {
+                            oauthBackedIds.insert(serverId)
+                        }
+                        pluginClaudeServers[serverId] = converted
                     }
                 }
             }
+        }
+
+        if !oauthBackedIds.isEmpty {
+            ensureClaudeEnvironment()
+            clearStaleNeedsAuthCache(forServerIds: oauthBackedIds)
         }
 
         if !pluginClaudeServers.isEmpty {
@@ -488,9 +540,10 @@ public actor SyncEngine {
                 for (serverId, converted) in pluginClaudeServers {
                     claudeServers[serverId] = converted
                 }
+                guard (rootDict["mcpServers"] as? NSDictionary) != (claudeServers as NSDictionary) else { continue }
                 rootDict["mcpServers"] = claudeServers
-                if let data = try? JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys]) {
-                    try? data.write(to: claudeConfigURL, options: .atomic)
+                if let data = try? JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+                    try? PathConstants.writeSecureData(data, to: claudeConfigURL, permissions: 0o600, preserveExistingPermissions: true)
                 }
             }
         }

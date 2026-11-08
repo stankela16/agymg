@@ -13,44 +13,114 @@ public struct RuntimeManifestPreviewView: View {
         _manifestJSON = State(initialValue: Self.generateManifestJSON(project: project, servers: state.servers))
     }
 
-    private struct ManifestPreview: Encodable {
-        struct ServerPreview: Encodable {
-            let command: String
-            let args: [String]
-            let active: Bool
+    private static let sensitiveParamKeys: Set<String> = [
+        "token", "access_token", "api_key", "apikey", "key", "secret", "password", "auth"
+    ]
+
+    private static func redactURLSecrets(_ rawURL: String) -> String {
+        guard var components = URLComponents(string: rawURL),
+              let items = components.queryItems, !items.isEmpty else {
+            return rawURL
         }
-        let schemaVersion: String
-        let scope: String
-        let masterVaultRef: String
-        let servers: [String: ServerPreview]
-        let activeSkills: [String]
+        var changed = false
+        components.queryItems = items.map { item in
+            if let val = item.value, !val.isEmpty,
+               sensitiveParamKeys.contains(item.name.lowercased()) {
+                changed = true
+                return URLQueryItem(name: item.name, value: "<REDACTED>")
+            }
+            return item
+        }
+        return changed ? (components.string ?? rawURL) : rawURL
+    }
+
+    private static func redactArgsSecrets(_ args: [Any]) -> [Any] {
+        let sensitiveFlags: Set<String> = ["--api-key", "--apikey", "--token", "--access-token", "--secret", "--password"]
+        var redacted: [Any] = []
+        var redactNext = false
+        for rawArg in args {
+            guard let str = rawArg as? String else {
+                redacted.append(rawArg)
+                redactNext = false
+                continue
+            }
+            if redactNext {
+                redacted.append(str.isEmpty ? str : "<REDACTED>")
+                redactNext = false
+                continue
+            }
+            let lower = str.lowercased()
+            if sensitiveFlags.contains(lower) {
+                redacted.append(str)
+                redactNext = true
+            } else if let eqIndex = str.firstIndex(of: "=") {
+                let prefix = String(str[..<eqIndex])
+                let suffix = String(str[str.index(after: eqIndex)...])
+                if sensitiveFlags.contains(prefix.lowercased()) && !suffix.isEmpty {
+                    redacted.append("\(prefix)=<REDACTED>")
+                } else {
+                    redacted.append(str)
+                }
+            } else {
+                redacted.append(str)
+            }
+        }
+        return redacted
     }
 
     static func generateManifestJSON(project: ProjectProfile, servers: [MCPServerDefinition]) -> String {
-        let enabled = servers.filter { project.enabledMCPServerIds.contains($0.id) }
-        var serverDict: [String: ManifestPreview.ServerPreview] = [:]
-        for s in enabled {
-            let argsList = s.config["args"]?.arrayValue?.compactMap { $0.stringValue } ?? []
-            serverDict[s.id] = ManifestPreview.ServerPreview(
-                command: s.command ?? "npx",
-                args: argsList,
-                active: true
-            )
+        let serverMap = Dictionary(uniqueKeysWithValues: servers.map { ($0.id, $0) })
+        var projectServers: [String: [String: Any]] = [:]
+
+        for serverId in project.enabledMCPServerIds.sorted() where PathConstants.isSafeResourceId(serverId) {
+            guard let server = serverMap[serverId] else { continue }
+            var raw = server.config.mapValues { $0.toAny() }
+            raw.removeValue(forKey: "disabled")
+
+            if let envDict = raw["env"] as? [String: Any] {
+                var redactedEnv: [String: Any] = [:]
+                for (k, v) in envDict {
+                    if let s = v as? String, !s.isEmpty {
+                        redactedEnv[k] = "<REDACTED>"
+                    } else {
+                        redactedEnv[k] = v
+                    }
+                }
+                raw["env"] = redactedEnv
+            }
+
+            if let headersDict = raw["headers"] as? [String: Any] {
+                var redactedHeaders: [String: Any] = [:]
+                for (k, v) in headersDict {
+                    if let s = v as? String, !s.isEmpty {
+                        redactedHeaders[k] = "<REDACTED>"
+                    } else {
+                        redactedHeaders[k] = v
+                    }
+                }
+                raw["headers"] = redactedHeaders
+            }
+
+            if let argsArray = raw["args"] as? [Any] {
+                raw["args"] = redactArgsSecrets(argsArray)
+            }
+
+            if let serverUrl = raw["serverUrl"] as? String {
+                raw["serverUrl"] = redactURLSecrets(serverUrl)
+            }
+            if let url = raw["url"] as? String {
+                raw["url"] = redactURLSecrets(url)
+            }
+
+            projectServers[serverId] = raw
         }
-        let preview = ManifestPreview(
-            schemaVersion: "2.1.0",
-            scope: project.name,
-            masterVaultRef: "~/.gemini/manager-vault/",
-            servers: serverDict,
-            activeSkills: Array(project.enabledSkillIds).sorted()
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(preview),
+
+        let payload: [String: Any] = ["mcpServers": projectServers]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
            let str = String(data: data, encoding: .utf8) {
             return str
         }
-        return "{\n  \"schemaVersion\": \"2.1.0\",\n  \"scope\": \"\(project.name)\"\n}"
+        return "{\n  \"mcpServers\" : {\n\n  }\n}"
     }
 
     func updateManifest() {

@@ -12,7 +12,7 @@ public final class ProjectFolderAccessManager: @unchecked Sendable {
 
     private var defaults: UserDefaults {
         if !PathConstants.isRunningUnderTests && PathConstants.hasEnvironmentOverride {
-            let hash = abs(PathConstants.geminiDirectory.path.hashValue)
+            let hash = PathConstants.stableShortHash(PathConstants.geminiDirectory.resolvingSymlinksInPath().path, length: 12)
             return UserDefaults(suiteName: "com.nikolastanojevic.agymg.env.\(hash)") ?? .standard
         }
         return .standard

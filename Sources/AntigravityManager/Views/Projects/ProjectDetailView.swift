@@ -26,6 +26,21 @@ public struct ProjectDetailView: View {
         state.projects.first(where: { $0.id == projectId }) ?? initialProject
     }
 
+    private var displayPath: String {
+        let raw = project.path
+        let effHome = PathConstants.effectiveHomeDirectory.path
+        if raw == effHome { return "~" }
+        if raw.hasPrefix(effHome + "/") {
+            return "~" + String(raw.dropFirst(effHome.count))
+        }
+        let sysHome = PathConstants.homeDirectory.path
+        if raw == sysHome { return "~" }
+        if raw.hasPrefix(sysHome + "/") {
+            return "~" + String(raw.dropFirst(sysHome.count))
+        }
+        return raw
+    }
+
     private var totalSkillsCount: Int {
         let localIds = Set(state.localSkills(for: project).map(\.id))
         return localIds.union(project.enabledSkillIds).count
@@ -103,7 +118,7 @@ public struct ProjectDetailView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "folder")
                             .font(.system(size: 10))
-                        Text(project.path)
+                        Text(displayPath)
                             .font(.system(size: 10, design: .monospaced))
                     }
                     .foregroundStyle(DesignTokens.inkSecondary)

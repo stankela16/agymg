@@ -12,7 +12,7 @@ public struct SettingsComplianceTab: View {
                         Text("agymg — Antigravity & Claude Code Manager")
                             .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(DesignTokens.ink)
-                        Text("Version 1.0.0 • Native macOS Control Center (MIT License)")
+                        Text("Version \(CLIRunner.currentVersion) • Native macOS Control Center (MIT License)")
                             .font(.system(size: 11))
                             .foregroundStyle(DesignTokens.inkTertiary)
                     }

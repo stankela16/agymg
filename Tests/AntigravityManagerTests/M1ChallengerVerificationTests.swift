@@ -220,9 +220,9 @@ final class M1ChallengerVerificationTests: XCTestCase {
                 hasStoredManifestJSON = true
                 if let stateProperty = child.value as? State<String> {
                     let jsonText = stateProperty.wrappedValue
-                    XCTAssertTrue(jsonText.contains("Test Runtime"))
+                    XCTAssertTrue(jsonText.contains("\"mcpServers\""))
                     XCTAssertTrue(jsonText.contains("server-alpha"))
-                    XCTAssertTrue(jsonText.contains("skill-beta"))
+                    XCTAssertTrue(jsonText.contains("index.js"))
                 }
             }
         }
@@ -338,14 +338,13 @@ final class M1ChallengerVerificationTests: XCTestCase {
         )
         state.projects = [project]
 
-        var preview = RuntimeManifestPreviewView(project: project, state: state)
+        let preview = RuntimeManifestPreviewView(project: project, state: state)
 
         // Verify initial manifest string
-        XCTAssertTrue(preview.manifestJSON.contains("Eval Project"))
+        XCTAssertTrue(preview.manifestJSON.contains("\"mcpServers\""))
         XCTAssertTrue(preview.manifestJSON.contains("mcp-eval-1"))
         XCTAssertTrue(preview.manifestJSON.contains("deno"))
-        XCTAssertTrue(preview.manifestJSON.contains("skill-alpha"))
-        XCTAssertTrue(preview.manifestJSON.contains("skill-zebra"))
+        XCTAssertFalse(preview.manifestJSON.contains("schemaVersion"))
 
         // Add server2 to state and project
         let server2 = MCPServerDefinition(

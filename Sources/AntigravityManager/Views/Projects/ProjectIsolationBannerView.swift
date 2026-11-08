@@ -33,7 +33,7 @@ public struct ProjectIsolationBannerView: View {
                         .clipShape(Capsule())
                 }
 
-                Text("Tools enabled here apply exclusively to this workspace via .agents/plugins/ and skills.json. Globally enabled tools are automatically inherited without extra configuration.")
+                Text("Tools enabled here apply exclusively to this workspace via .agents/plugins/, .agents/skills/, and .claude/skills/. Globally enabled tools are automatically inherited without extra configuration.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DesignTokens.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)

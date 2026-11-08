@@ -80,7 +80,7 @@ public struct HeroBannerView: View {
                 .padding(.horizontal, 9).padding(.vertical, 4).background(DesignTokens.storeBlueTint).clipShape(Capsule())
                 .overlay(Capsule().strokeBorder(DesignTokens.primary.opacity(0.25), lineWidth: 0.5))
 
-                Text("v1.0.0").font(.system(size: 11, weight: .medium)).foregroundStyle(DesignTokens.inkSecondary)
+                Text("v\(CLIRunner.currentVersion)").font(.system(size: 11, weight: .medium)).foregroundStyle(DesignTokens.inkSecondary)
                     .padding(.horizontal, 8).padding(.vertical, 3).background(DesignTokens.surfaceContainerLowest).clipShape(Capsule())
                     .overlay(Capsule().strokeBorder(DesignTokens.cardBorder, lineWidth: 0.5))
 

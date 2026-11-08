@@ -14,29 +14,32 @@ extension SyncEngine {
 
         _ = createConfigSnapshotIfNeeded(force: false)
 
-        // 0. Ensure .gitignore protection for project credentials & agent configs
-        ensureGitignore(at: projectURL)
-
         let agentsDir = projectURL.appendingPathComponent(".agents", isDirectory: true)
 
         // 1. Sync Project MCP Servers (via .agents/plugins/agy-manager)
         let pluginDir = agentsDir.appendingPathComponent("plugins/agy-manager", isDirectory: true)
-        if project.enabledMCPServerIds.isEmpty {
-            if fm.fileExists(atPath: pluginDir.path) {
+        let validServerIds = project.enabledMCPServerIds.filter { PathConstants.isSafeResourceId($0) }
+        if validServerIds.isEmpty {
+            if fm.fileExists(atPath: pluginDir.path) || isSymlink(at: pluginDir) {
                 try? fm.removeItem(at: pluginDir)
             }
         } else {
+            // Only protect .gitignore when this is a git repository AND agymg is writing project MCP configs
+            if fm.fileExists(atPath: projectURL.appendingPathComponent(".git").path) {
+                ensureGitignore(at: projectURL)
+            }
+
             try fm.createDirectory(at: pluginDir, withIntermediateDirectories: true)
 
             let pluginJsonURL = pluginDir.appendingPathComponent("plugin.json")
             let pluginMeta: [String: Any] = ["name": "agy-manager"]
-            let metaData = try JSONSerialization.data(withJSONObject: pluginMeta, options: [.prettyPrinted])
+            let metaData = try JSONSerialization.data(withJSONObject: pluginMeta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             try metaData.write(to: pluginJsonURL, options: .atomic)
 
             let serverMap = Dictionary(uniqueKeysWithValues: allServers.map { ($0.id, $0) })
             var projectServers: [String: [String: Any]] = [:]
 
-            for serverId in project.enabledMCPServerIds {
+            for serverId in validServerIds {
                 if let server = serverMap[serverId] {
                     var raw = server.config.mapValues { $0.toAny() }
                     raw.removeValue(forKey: "disabled")
@@ -46,8 +49,8 @@ extension SyncEngine {
 
             let mcpConfigURL = pluginDir.appendingPathComponent("mcp_config.json")
             let mcpPayload: [String: Any] = ["mcpServers": projectServers]
-            let mcpData = try JSONSerialization.data(withJSONObject: mcpPayload, options: [.prettyPrinted, .sortedKeys])
-            try mcpData.write(to: mcpConfigURL, options: .atomic)
+            let mcpData = try JSONSerialization.data(withJSONObject: mcpPayload, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            try PathConstants.writeSecureData(mcpData, to: mcpConfigURL, permissions: 0o600)
         }
 
         // 2. Sync Project Skills (via .agents/skills/<skill-id>)
@@ -58,7 +61,7 @@ extension SyncEngine {
             try fm.createDirectory(at: projectSkillsDir, withIntermediateDirectories: true)
         }
 
-        for skill in allSkills {
+        for skill in allSkills where PathConstants.isSafeResourceId(skill.id) {
             let targetURL = projectSkillsDir.appendingPathComponent(skill.id)
             let vaultSkillURL = vaultSkillsDir.appendingPathComponent(skill.id)
             let sourceURL = fm.fileExists(atPath: vaultSkillURL.path)
@@ -66,8 +69,8 @@ extension SyncEngine {
                 : URL(fileURLWithPath: skill.path)
 
             if project.enabledSkillIds.contains(skill.id) {
-                let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                if let symlinkDest {
+                if isSymlink(at: targetURL) {
+                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
                     if symlinkDest != sourceURL.path {
                         try? fm.removeItem(at: targetURL)
                         if fm.fileExists(atPath: sourceURL.path) {
@@ -80,7 +83,7 @@ extension SyncEngine {
                     }
                 }
             } else {
-                if isSymlink(at: targetURL) || (try? fm.destinationOfSymbolicLink(atPath: targetURL.path)) != nil {
+                if isSymlink(at: targetURL) {
                     try? fm.removeItem(at: targetURL)
                 }
             }
@@ -90,7 +93,7 @@ extension SyncEngine {
         let projectPluginsDir = agentsDir.appendingPathComponent("plugins", isDirectory: true)
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
 
-        for plugin in allPlugins {
+        for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) {
             guard plugin.id != "agy-manager" else { continue }
             let targetURL = projectPluginsDir.appendingPathComponent(plugin.id)
             let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
@@ -103,8 +106,8 @@ extension SyncEngine {
                     continue
                 }
                 try fm.createDirectory(at: projectPluginsDir, withIntermediateDirectories: true)
-                let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                if let symlinkDest {
+                if isSymlink(at: targetURL) {
+                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
                     if symlinkDest != sourceURL.path {
                         try? fm.removeItem(at: targetURL)
                         if fm.fileExists(atPath: sourceURL.path) {
@@ -117,13 +120,13 @@ extension SyncEngine {
                     }
                 }
             } else {
-                if isSymlink(at: targetURL) || (try? fm.destinationOfSymbolicLink(atPath: targetURL.path)) != nil {
+                if isSymlink(at: targetURL) {
                     try? fm.removeItem(at: targetURL)
-                } else if fm.fileExists(atPath: targetURL.path) {
-                    if !fm.fileExists(atPath: vaultPluginURL.path) {
-                        try? fm.copyItem(at: targetURL, to: vaultPluginURL)
-                    }
-                    if fm.fileExists(atPath: vaultPluginURL.path) {
+                } else if fm.fileExists(atPath: targetURL.path),
+                          !fm.fileExists(atPath: vaultPluginURL.path),
+                          !isGitTrackedPath(targetURL, in: projectURL) {
+                    try? fm.createDirectory(at: vaultPluginsDir, withIntermediateDirectories: true)
+                    if (try? fm.copyItem(at: targetURL, to: vaultPluginURL)) != nil {
                         try? fm.removeItem(at: targetURL)
                     }
                 }
@@ -135,6 +138,34 @@ extension SyncEngine {
 
         // 5. Sync Project Skills & Plugin Skills to Claude (<project>/.claude/skills/<skill-id>)
         syncClaudeProjectSkills(project: project, allSkills: allSkills, allPlugins: allPlugins)
+    }
+
+    private func isGitTrackedPath(_ targetURL: URL, in projectURL: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: projectURL.appendingPathComponent(".git").path) else {
+            return false
+        }
+        let repoStd = projectURL.standardizedFileURL.path
+        let targetStd = targetURL.standardizedFileURL.path
+        guard targetStd.hasPrefix(repoStd + "/") else { return false }
+        let relativePath = String(targetStd.dropFirst(repoStd.count + 1))
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", repoStd, "ls-files", "--", relativePath]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let out = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return true }
+            let text = String(data: out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return !text.isEmpty
+        } catch {
+            return true
+        }
     }
 
     public func syncClaudeProjectSkills(
@@ -150,7 +181,7 @@ extension SyncEngine {
         var desiredSkillSources: [String: URL] = [:]
 
         // 1. Enabled Vault / Global skills for this project
-        for skill in allSkills where project.enabledSkillIds.contains(skill.id) {
+        for skill in allSkills where PathConstants.isSafeResourceId(skill.id) && project.enabledSkillIds.contains(skill.id) {
             let vaultSkillURL = vaultSkillsDir.appendingPathComponent(skill.id)
             let sourceURL = fm.fileExists(atPath: vaultSkillURL.path)
                 ? vaultSkillURL
@@ -165,6 +196,7 @@ extension SyncEngine {
         if let items = try? fm.contentsOfDirectory(at: agentsSkillsDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
             for item in items {
                 let skillId = item.lastPathComponent
+                guard PathConstants.isSafeResourceId(skillId) else { continue }
                 if desiredSkillSources[skillId] == nil && fm.fileExists(atPath: item.path) {
                     desiredSkillSources[skillId] = item.resolvingSymlinksInPath()
                 }
@@ -172,7 +204,7 @@ extension SyncEngine {
         }
 
         // 3. Skills bundled inside enabled project plugins (<plugin>/skills/*)
-        for plugin in allPlugins where project.enabledPluginIds.contains(plugin.id) && plugin.id != "agy-manager" {
+        for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) && project.enabledPluginIds.contains(plugin.id) && plugin.id != "agy-manager" {
             let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
             let sourcePluginURL = fm.fileExists(atPath: vaultPluginURL.path)
                 ? vaultPluginURL
@@ -181,6 +213,7 @@ extension SyncEngine {
             if let subSkills = try? fm.contentsOfDirectory(at: pluginSkillsDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                 for subSkill in subSkills where fm.fileExists(atPath: subSkill.path) {
                     let subId = subSkill.lastPathComponent
+                    guard PathConstants.isSafeResourceId(subId) else { continue }
                     if desiredSkillSources[subId] == nil {
                         desiredSkillSources[subId] = subSkill.resolvingSymlinksInPath()
                     }
@@ -190,14 +223,12 @@ extension SyncEngine {
 
         let claudeSkillsDir = projectURL.appendingPathComponent(".claude/skills", isDirectory: true)
 
-        // Clean up any stale symlinks in <project>/.claude/skills/ that are no longer enabled
+        // Clean up any stale symlinks in <project>/.claude/skills/ that are no longer enabled (never delete real directories)
         if let existingItems = try? fm.contentsOfDirectory(at: claudeSkillsDir, includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsHiddenFiles]) {
             for item in existingItems {
                 let name = item.lastPathComponent
-                if desiredSkillSources[name] == nil {
-                    if isSymlink(at: item) || (try? fm.destinationOfSymbolicLink(atPath: item.path)) != nil {
-                        try? fm.removeItem(at: item)
-                    }
+                if desiredSkillSources[name] == nil && isSymlink(at: item) {
+                    try? fm.removeItem(at: item)
                 }
             }
         }
@@ -207,9 +238,10 @@ extension SyncEngine {
         try? fm.createDirectory(at: claudeSkillsDir, withIntermediateDirectories: true)
         var createdSymlinkNames: [String] = []
 
-        for (skillId, sourceURL) in desiredSkillSources {
+        for (skillId, sourceURL) in desiredSkillSources where PathConstants.isSafeResourceId(skillId) {
             let targetURL = claudeSkillsDir.appendingPathComponent(skillId)
-            if let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path) {
+            if isSymlink(at: targetURL) {
+                let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
                 if symlinkDest != sourceURL.path {
                     try? fm.removeItem(at: targetURL)
                     try? fm.createSymbolicLink(at: targetURL, withDestinationURL: sourceURL)
@@ -237,11 +269,13 @@ extension SyncEngine {
 
         var linkedSkillIds: [String] = []
         for item in items where !isSymlink(at: item) && fm.fileExists(atPath: item.appendingPathComponent("SKILL.md").path) {
-            let targetURL = agentsSkillsDir.appendingPathComponent(item.lastPathComponent)
+            let skillId = item.lastPathComponent
+            guard PathConstants.isSafeResourceId(skillId) else { continue }
+            let targetURL = agentsSkillsDir.appendingPathComponent(skillId)
             guard !fm.fileExists(atPath: targetURL.path), !isSymlink(at: targetURL) else { continue }
             try? fm.createDirectory(at: agentsSkillsDir, withIntermediateDirectories: true)
             if (try? fm.createSymbolicLink(at: targetURL, withDestinationURL: item)) != nil {
-                linkedSkillIds.append(item.lastPathComponent)
+                linkedSkillIds.append(skillId)
             }
         }
         ensureGitExcludeForSkills(at: projectURL, directory: ".agents/skills", symlinkedSkillIds: linkedSkillIds)
@@ -278,21 +312,26 @@ extension SyncEngine {
         allServers: [MCPServerDefinition],
         allPlugins: [PluginDefinition]
     ) {
-        ensureClaudeEnvironment()
         let fm = FileManager.default
+        let oauthURLs = loadOAuthServerURLs()
+        var oauthBackedIds: Set<String> = []
         let serverMap = Dictionary(uniqueKeysWithValues: allServers.map { ($0.id, $0) })
         var claudeProjectServers: [String: [String: Any]] = [:]
 
-        for serverId in project.enabledMCPServerIds {
+        for serverId in project.enabledMCPServerIds where PathConstants.isSafeResourceId(serverId) {
             if let server = serverMap[serverId] {
                 let raw = server.config.mapValues { $0.toAny() }
-                claudeProjectServers[serverId] = convertToClaudeMCPConfig(raw)
+                let converted = convertToClaudeMCPConfig(raw, oauthServerURLs: oauthURLs)
+                if converted["headersHelper"] != nil {
+                    oauthBackedIds.insert(serverId)
+                }
+                claudeProjectServers[serverId] = converted
             }
         }
 
         // Include MCP servers bundled inside enabled project plugins
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
-        for plugin in allPlugins where project.enabledPluginIds.contains(plugin.id) && plugin.id != "agy-manager" {
+        for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) && project.enabledPluginIds.contains(plugin.id) && plugin.id != "agy-manager" {
             let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
             let sourcePluginURL = fm.fileExists(atPath: vaultPluginURL.path)
                 ? vaultPluginURL
@@ -301,16 +340,26 @@ extension SyncEngine {
             if let data = try? Data(contentsOf: pluginMCPFile),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let pluginServers = json["mcpServers"] as? [String: [String: Any]] {
-                for (serverId, rawConfig) in pluginServers {
+                for (serverId, rawConfig) in pluginServers where PathConstants.isSafeResourceId(serverId) {
                     guard claudeProjectServers[serverId] == nil else { continue }
+                    let converted: [String: Any]
                     if let vaultServer = serverMap[serverId] {
                         let raw = vaultServer.config.mapValues { $0.toAny() }
-                        claudeProjectServers[serverId] = convertToClaudeMCPConfig(raw)
+                        converted = convertToClaudeMCPConfig(raw, oauthServerURLs: oauthURLs)
                     } else {
-                        claudeProjectServers[serverId] = convertToClaudeMCPConfig(rawConfig)
+                        converted = convertToClaudeMCPConfig(rawConfig, oauthServerURLs: oauthURLs)
                     }
+                    if converted["headersHelper"] != nil {
+                        oauthBackedIds.insert(serverId)
+                    }
+                    claudeProjectServers[serverId] = converted
                 }
             }
+        }
+
+        if !oauthBackedIds.isEmpty {
+            ensureClaudeEnvironment()
+            clearStaleNeedsAuthCache(forServerIds: oauthBackedIds)
         }
 
         for configFile in PathConstants.allClaudeConfigFiles {
@@ -322,17 +371,22 @@ extension SyncEngine {
             }
 
             var projectsDict = (rootDict["projects"] as? [String: Any]) ?? [:]
-            var projectEntry = (projectsDict[project.path] as? [String: Any]) ?? [:]
-            // Claude Code writes this file constantly, so touch it only when there is a real change.
-            guard (projectEntry["mcpServers"] as? NSDictionary) != (claudeProjectServers as NSDictionary)
-                || projectEntry["hasTrustDialogAccepted"] as? Bool != true else { continue }
+            let existingEntry = projectsDict[project.path] as? [String: Any]
+            let existingServers = existingEntry?["mcpServers"] as? [String: Any]
+
+            if claudeProjectServers.isEmpty && (existingServers == nil || existingServers?.isEmpty == true) {
+                continue
+            }
+
+            var projectEntry = existingEntry ?? [:]
+            // Claude Code writes this file constantly, so touch it only when mcpServers actually changed.
+            guard (projectEntry["mcpServers"] as? NSDictionary) != (claudeProjectServers as NSDictionary) else { continue }
             projectEntry["mcpServers"] = claudeProjectServers
-            projectEntry["hasTrustDialogAccepted"] = true
             projectsDict[project.path] = projectEntry
             rootDict["projects"] = projectsDict
 
-            if let data = try? JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys]) {
-                try? data.write(to: claudeConfigURL, options: .atomic)
+            if let data = try? JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+                try? PathConstants.writeSecureData(data, to: claudeConfigURL, permissions: 0o600, preserveExistingPermissions: true)
             }
         }
     }
@@ -605,6 +659,11 @@ def main():
         else os.path.realpath(os.path.join(real_home, ".gemini", "antigravity", "mcp_oauth_tokens.json"))
     )
 
+    fallback_headers = load_static_headers_fallback(real_home, server_url, server_name)
+    if any(k.lower() == "authorization" for k in fallback_headers.keys()):
+        sys.stdout.write(json.dumps(fallback_headers) + "\n")
+        return
+
     data = {}
     if os.path.isfile(oauth_file):
         try:
@@ -636,8 +695,10 @@ def main():
                                 fresh_entry["token"] = refreshed
                                 fresh_data[key] = fresh_entry
                                 tmp_file = oauth_file + ".tmp"
-                                with open(tmp_file, "w", encoding="utf-8") as wf:
+                                fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                                with os.fdopen(fd, "w", encoding="utf-8") as wf:
                                     json.dump(fresh_data, wf, indent=2)
+                                os.chmod(tmp_file, 0o600)
                                 os.replace(tmp_file, oauth_file)
                                 token_obj = refreshed
                             else:
@@ -655,9 +716,7 @@ def main():
             sys.stdout.write(json.dumps({"Authorization": f"Bearer {access_token}"}) + "\n")
             return
 
-    fallback_headers = load_static_headers_fallback(real_home, server_url, server_name)
     if fallback_headers:
-        clear_claude_needs_auth_cache(real_home, server_name)
         sys.stdout.write(json.dumps(fallback_headers) + "\n")
     else:
         sys.stdout.write("{}\n")

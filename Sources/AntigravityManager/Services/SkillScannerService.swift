@@ -3,30 +3,12 @@ import Foundation
 public struct SkillScannerService: Sendable {
     public init() {}
 
-    public func scanVaultSkills() -> [SkillDefinition] {
+    public func scanVaultSkills(readOnly: Bool = false) -> [SkillDefinition] {
         let vaultDir = PathConstants.vaultSkillsDirectory
         let fm = FileManager.default
 
-        // Ensure vault skills directory exists
-        if !fm.fileExists(atPath: vaultDir.path) {
+        if !readOnly && !fm.fileExists(atPath: vaultDir.path) {
             try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
-        }
-
-        // Auto-ingest/import any new skills from global config (~/.gemini/config/skills) into the vault
-        let globalSkillsDir = PathConstants.globalSkillsDirectory
-        if let globalItems = try? fm.contentsOfDirectory(at: globalSkillsDir, includingPropertiesForKeys: [.isDirectoryKey], options: []) {
-            for item in globalItems where !item.lastPathComponent.hasPrefix(".") {
-                var isDir: ObjCBool = false
-                if fm.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
-                    let dest = vaultDir.appendingPathComponent(item.lastPathComponent)
-                    if !fm.fileExists(atPath: dest.path) {
-                        let isSymlink = (try? fm.destinationOfSymbolicLink(atPath: item.path)) != nil
-                        if !isSymlink {
-                            try? fm.copyItem(at: item, to: dest)
-                        }
-                    }
-                }
-            }
         }
 
         return scanDirectory(vaultDir, defaultOrigin: .vault)

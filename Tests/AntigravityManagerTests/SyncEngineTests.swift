@@ -430,9 +430,24 @@ final class SyncEngineTests: XCTestCase {
             ]
         )
 
+        let oauthTokensURL = PathConstants.engineMCPOAuthTokensFile
+        try fm.createDirectory(at: oauthTokensURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let oauthPayload: [String: Any] = [
+            "https://api.mobbin.com/mcp": [
+                "server_url": "https://api.mobbin.com/mcp",
+                "token": [
+                    "access_token": "tok_mobbin_123",
+                    "refresh_token": "ref_mobbin_123"
+                ]
+            ]
+        ]
+        let oauthData = try JSONSerialization.data(withJSONObject: oauthPayload)
+        try oauthData.write(to: oauthTokensURL)
+
         let authCache = PathConstants.claudeDirectory.appendingPathComponent("mcp-needs-auth-cache.json")
         try fm.createDirectory(at: PathConstants.claudeDirectory, withIntermediateDirectories: true)
-        try "{\"mobbin\":{\"timestamp\":123}}".write(to: authCache, atomically: true, encoding: .utf8)
+        try "{\"mobbin\":{\"timestamp\":123},\"unrelated-oauth\":{\"timestamp\":456}}"
+            .write(to: authCache, atomically: true, encoding: .utf8)
         try "{\"disableClaudeAiConnectors\":false,\"enabledPlugins\":{\"browser-use@synced\":true}}"
             .write(to: PathConstants.claudeSettingsFile, atomically: true, encoding: .utf8)
 
@@ -454,20 +469,22 @@ final class SyncEngineTests: XCTestCase {
         let stitchConfig = mcpServers?["stitch"]
         XCTAssertEqual(stitchConfig?["type"] as? String, "http")
         XCTAssertEqual((stitchConfig?["headers"] as? [String: String])?["X-Goog-Api-Key"], "secret-key")
-        XCTAssertEqual(stitchConfig?["headersHelper"] as? String, PathConstants.claudeMCPOAuthHelperScript.path)
+        XCTAssertNil(stitchConfig?["headersHelper"], "Non-OAuth HTTP servers with static headers must not attach headersHelper")
 
         let settingsData = try Data(contentsOf: PathConstants.claudeSettingsFile)
         let settingsJson = try JSONSerialization.jsonObject(with: settingsData) as? [String: Any]
         XCTAssertEqual(settingsJson?["disableClaudeAiConnectors"] as? Bool, false, "Connectors are the user's choice")
         XCTAssertEqual((settingsJson?["enabledPlugins"] as? [String: Bool])?["browser-use@synced"], true, "Plugins are the user's choice")
-        XCTAssertEqual(settingsJson?["enableAllProjectMcpServers"] as? Bool, true)
+        XCTAssertNil(settingsJson?["enableAllProjectMcpServers"], "SyncEngine must never bypass Claude Code MCP approval prompts")
 
-        let cacheContent = try String(contentsOf: authCache, encoding: .utf8)
-        XCTAssertEqual(cacheContent, "{}")
+        let cacheData = try Data(contentsOf: authCache)
+        let cacheJson = try JSONSerialization.jsonObject(with: cacheData) as? [String: Any]
+        XCTAssertNil(cacheJson?["mobbin"], "Stale cache entry for OAuth-backed server must be cleared")
+        XCTAssertNotNil(cacheJson?["unrelated-oauth"], "Unrelated auth cache entries must be preserved")
 
         XCTAssertTrue(
             fm.fileExists(atPath: PathConstants.claudeMCPOAuthHelperScript.path),
-            "ensureClaudeEnvironment must self-heal and create mcp-oauth-headers.py on disk"
+            "ensureClaudeEnvironment must self-heal and create mcp-oauth-headers.py on disk when OAuth servers exist"
         )
         XCTAssertTrue(
             fm.isExecutableFile(atPath: PathConstants.claudeMCPOAuthHelperScript.path),

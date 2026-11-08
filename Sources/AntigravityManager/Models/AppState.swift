@@ -192,11 +192,6 @@ public final class AppState {
         self.globalSkillIds = globalSelection.enabledSkillIds
         self.globalPluginIds = globalSelection.enabledPluginIds
 
-        // If globalSkillIds is completely empty on first launch, initialize with ask & github
-        if self.globalSkillIds.isEmpty && !scannedSkills.isEmpty {
-            self.globalSkillIds = Set(["ask", "github"].filter { id in scannedSkills.contains { $0.id == id } })
-        }
-
         if isProjectsFolderAuthorized {
             guard !Task.isCancelled else { return }
             let loadedProjects = await vaultService.loadProjects()
@@ -560,8 +555,12 @@ public final class AppState {
         let pScanner = self.pluginScanner
         let sScanner = self.skillScanner
         let aService = self.projectAuditService
+        let existingIds = Set(projects.map(\.id))
+        let uniqueId = existingIds.contains(name)
+            ? "\(name)_\(PathConstants.stableShortHash(path, length: 6))"
+            : name
         let (newProject, scannedLocalSkills, auditForProject) = await Task.detached(priority: .userInitiated) { () -> (ProjectProfile, [SkillDefinition], ProjectSafetyAudit) in
-            var proj = ProjectProfile(id: name, name: name, path: path)
+            var proj = ProjectProfile(id: uniqueId, name: name, path: path)
             let fm = FileManager.default
 
             // Scan local plugins and MCP servers in the newly imported project
@@ -569,6 +568,7 @@ public final class AppState {
             if let pluginFolders = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
                 for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
                     let pluginName = pluginFolder.lastPathComponent
+                    guard PathConstants.isSafeResourceId(pluginName) else { continue }
                     if pluginName != "agy-manager" {
                         proj.enabledPluginIds.insert(pluginName)
                     }
@@ -576,7 +576,7 @@ public final class AppState {
                     if let data = try? Data(contentsOf: mcpFile),
                        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let servers = json["mcpServers"] as? [String: Any] {
-                        for serverKey in servers.keys {
+                        for serverKey in servers.keys where PathConstants.isSafeResourceId(serverKey) {
                             proj.enabledMCPServerIds.insert(serverKey)
                         }
                     }
@@ -587,7 +587,9 @@ public final class AppState {
             let skillsDir = canonicalURL.appendingPathComponent(".agents/skills", isDirectory: true)
             if let skillFolders = try? fm.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: nil) {
                 for skillFolder in skillFolders where !skillFolder.lastPathComponent.hasPrefix(".") {
-                    proj.enabledSkillIds.insert(skillFolder.lastPathComponent)
+                    let skillName = skillFolder.lastPathComponent
+                    guard PathConstants.isSafeResourceId(skillName) else { continue }
+                    proj.enabledSkillIds.insert(skillName)
                 }
             }
 
@@ -707,6 +709,9 @@ public final class AppState {
         guard !cleanId.isEmpty else {
             throw NSError(domain: "SkillCreation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Skill ID cannot be empty"])
         }
+        guard PathConstants.isSafeResourceId(cleanId) else {
+            throw NSError(domain: "SkillCreation", code: 3, userInfo: [NSLocalizedDescriptionKey: "Skill ID cannot contain path separators or traversal segments"])
+        }
 
         let folderURL = PathConstants.vaultSkillsDirectory.appendingPathComponent(cleanId, isDirectory: true)
         let fm = FileManager.default
@@ -769,6 +774,10 @@ public final class AppState {
 
     // MARK: - MCP Server Management
     public func saveServer(_ server: MCPServerDefinition, enableGlobally: Bool = false) async {
+        guard PathConstants.isSafeResourceId(server.id) else {
+            statusMessage = "Invalid MCP server ID"
+            return
+        }
         if let index = servers.firstIndex(where: { $0.id == server.id }) {
             servers[index] = server
         } else {

@@ -71,7 +71,7 @@ public struct PluginScannerService: Sendable {
 
         for item in enumerator where !item.lastPathComponent.hasPrefix(".") {
             let pluginId = item.lastPathComponent
-            if excludingIds.contains(pluginId) {
+            if !PathConstants.isSafeResourceId(pluginId) || excludingIds.contains(pluginId) {
                 continue
             }
 
@@ -106,16 +106,17 @@ public struct PluginScannerService: Sendable {
         return ingestedIds
     }
 
-    public func scanVaultPlugins() -> [PluginDefinition] {
+    public func scanVaultPlugins(readOnly: Bool = false) -> [PluginDefinition] {
         let vaultDir = PathConstants.vaultPluginsDirectory
         let fm = FileManager.default
 
-        if !fm.fileExists(atPath: vaultDir.path) {
-            try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+        if !readOnly {
+            if !fm.fileExists(atPath: vaultDir.path) {
+                try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+            }
+            // Auto-ingest any non-symlinked plugins from global config (~/.gemini/config/plugins) into the vault
+            autoIngestPlugins(from: PathConstants.globalPluginsDirectory, into: vaultDir)
         }
-
-        // Auto-ingest any non-symlinked plugins from global config (~/.gemini/config/plugins) into the vault
-        autoIngestPlugins(from: PathConstants.globalPluginsDirectory, into: vaultDir)
 
         return scanPlugins(in: vaultDir)
     }
@@ -133,27 +134,29 @@ public struct PluginScannerService: Sendable {
         scanProjectPlugins(at: URL(fileURLWithPath: projectPath))
     }
 
-    public func scanAllPlugins(projects: [ProjectProfile]) -> [PluginDefinition] {
+    public func scanAllPlugins(projects: [ProjectProfile], readOnly: Bool = false) -> [PluginDefinition] {
         let vaultDir = PathConstants.vaultPluginsDirectory
         let fm = FileManager.default
 
-        if !fm.fileExists(atPath: vaultDir.path) {
-            try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+        if !readOnly {
+            if !fm.fileExists(atPath: vaultDir.path) {
+                try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+            }
+
+            // 1. Auto-ingest global plugins
+            autoIngestPlugins(from: PathConstants.globalPluginsDirectory, into: vaultDir)
+
+            // 2. Auto-ingest project plugins (excluding agy-manager)
+            for project in projects {
+                let projectPluginsDir = URL(fileURLWithPath: project.path).appendingPathComponent(".agents/plugins", isDirectory: true)
+                autoIngestPlugins(from: projectPluginsDir, into: vaultDir, excludingIds: ["agy-manager"])
+            }
         }
 
-        // 1. Auto-ingest global plugins
-        autoIngestPlugins(from: PathConstants.globalPluginsDirectory, into: vaultDir)
-
-        // 2. Auto-ingest project plugins (excluding agy-manager)
-        for project in projects {
-            let projectPluginsDir = URL(fileURLWithPath: project.path).appendingPathComponent(".agents/plugins", isDirectory: true)
-            autoIngestPlugins(from: projectPluginsDir, into: vaultDir, excludingIds: ["agy-manager"])
-        }
-
-        // 3. Scan Vault plugins (now containing all ingested items with canonical vault paths)
+        // 3. Scan Vault plugins
         var all = scanPlugins(in: vaultDir)
 
-        // 4. Fallback: check global and project plugins in case any could not be copied (e.g. permission restrictions)
+        // 4. Fallback: check global and project plugins in case any were not copied or readOnly is true
         for p in scanGlobalPlugins() {
             if !all.contains(where: { $0.id == p.id }) {
                 all.append(p)

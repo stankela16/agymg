@@ -13,7 +13,7 @@
 
 Define your MCP servers, skills, and plugins **once** in a local Master Vault—then toggle them globally or scope them per repository across **both** **Claude Code** and **Antigravity** in one click.
 
-[Quick Install](#quick-install) • [Under the Hood Example](#minimal-example-sharing-1-mcp-server--1-skill-under-the-hood) • [Features](#features) • [Headless CLI](#headless-cli--sessionstart-radar) • [Contributing](CONTRIBUTING.md)
+[Quick Install](#quick-install) • [Under the Hood Example](#minimal-example-sharing-1-mcp-server--1-skill-under-the-hood) • [What It Modifies](#what-agymg-modifies-on-disk) • [Headless CLI](#headless-cli--sessionstart-radar) • [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -54,17 +54,17 @@ Running **Claude Code** alongside **Antigravity** on the same Mac quickly turns 
 
 ## Quick Install
 
-> **Requirements**: macOS 14.0+ (Sonoma or Sequoia) and Xcode Command Line Tools (`xcode-select --install`).
+> **Requirements**: macOS 14.0+ (Sonoma or Sequoia) and Xcode 16+ or Xcode Command Line Tools 16+ with **Swift 6.0+** (`xcode-select --install`).
 
 ### Option 1 — One-Command Install (Recommended)
 
 Compiles a native release binary locally on your Mac and signs `agymg.app` ad-hoc—**zero `com.apple.quarantine` Gatekeeper popups** without needing a paid Apple Developer certificate:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stankela16/agymg/main/Scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/stankela16/agymg/v1.0.1/Scripts/install.sh | bash
 ```
 
-This installs `/Applications/agymg.app` and links the `agymg` CLI into `/opt/homebrew/bin/agymg` (or `/usr/local/bin` / `~/.local/bin`).
+This installs `/Applications/agymg.app` and links the `agymg` CLI into `~/.local/bin/agymg` or `/opt/homebrew/bin/agymg` (without overwriting an existing Homebrew formula symlink).
 
 ### Option 2 — Homebrew
 
@@ -81,7 +81,7 @@ cd agymg
 ./Scripts/install.sh
 ```
 
-Launch `agymg` from Spotlight or `/Applications/agymg.app`. On first launch, choose your Projects folder (or skip and import individual repositories anytime with `⌘O`). Existing MCP servers and skills from `~/.claude.json`, `~/.claude/skills`, and `~/.gemini/config/` are imported into your Master Vault automatically—after taking a timestamped backup snapshot of your original configs.
+Launch `agymg` from Spotlight or `/Applications/agymg.app`. On first launch, choose your Projects folder (or skip and import individual repositories anytime with `⌘O`). Existing MCP servers and skills from `~/.claude.json`, `~/.claude/skills`, and `~/.gemini/config/` are imported into your Master Vault automatically—after taking a timestamped `0600` backup snapshot of your original configs.
 
 ---
 
@@ -103,7 +103,7 @@ Curious what `agymg` actually writes to disk—or want to wire up the same cross
 
 ```text
 ~/Projects/acme-web/
-├── .gitignore                    # Auto-guarded so generated MCP secrets never get committed
+├── .gitignore                    # Updated only when .git exists AND project MCPs are enabled
 ├── .git/info/exclude             # Keeps symlinked .claude/skills entries out of `git status`
 ├── .agents/                      # ← Read by Antigravity
 │   ├── skills/
@@ -145,13 +145,12 @@ Antigravity only scopes MCP servers to a single repository when wrapped in a loc
 
 #### Claude Code Per-Project Scope (`~/.claude.json`)
 
-Simultaneously, `agymg` updates the matching project entry inside `~/.claude.json` (preserving all unrelated Claude Code state, OAuth tokens, and history, and automatically translating remote `serverUrl` ↔ `{"type": "http", "url": "..."}`):
+Simultaneously, `agymg` updates only the `mcpServers` map under the matching project entry inside `~/.claude.json` (preserving file permissions, security trust prompts, OAuth state, and history, while translating remote `serverUrl` ↔ `{"type": "http", "url": "..."}`):
 
 ```json
 {
   "projects": {
     "/Users/alex/Projects/acme-web": {
-      "hasTrustDialogAccepted": true,
       "mcpServers": {
         "supabase": {
           "type": "stdio",
@@ -171,13 +170,31 @@ And because both `.agents/skills/react-perf` and `.claude/skills/react-perf` are
 
 ---
 
+## What `agymg` Modifies on Disk
+
+`agymg` operates exclusively on local configuration files and POSIX symlinks—no background daemons when closed, no network telemetry, and no bypassing of Claude Code trust prompts:
+
+| Location | Behavior |
+| :--- | :--- |
+| `~/.gemini/manager-vault/` | Canonical Master Vault directory (`0700`) containing `master_mcp.json`, `global_selection.json`, `projects.json`, `skills/`, `plugins/`, and `backups/snapshot-<timestamp>/` (`0600` JSON files). |
+| `~/.gemini/config/skills/` & `~/.claude/skills/` | Pre-existing and newly created global skill folders (older than 30s) are adopted into `~/.gemini/manager-vault/skills/<id>/` and replaced with POSIX symlinks so both agents share one copy. Running `agymg uninstall --restore` converts them back into standalone physical folders. |
+| `~/.gemini/config/mcp_config.json` | Writes `mcpServers` (`0600` permissions) with `"disabled": false` for globally enabled servers and `"disabled": true` for catalog-only servers, preserving unrelated top-level keys. |
+| `~/.claude.json` | Updates user-scope `mcpServers` and `projects["<repo>"].mcpServers` while preserving existing file permissions and all other keys. Never sets `hasTrustDialogAccepted` or `enableAllProjectMcpServers`, and never overwrites a physical `~/.claude/CLAUDE.md`. |
+| `<repo>/.agents/plugins/agy-manager/` | Created (`0600` `mcp_config.json`) **only** when a registered project has at least one project-scoped MCP server enabled; removed when project MCPs are disabled. |
+| `<repo>/.gitignore` & `<repo>/.git/info/exclude` | Appends `.agents/plugins/agy-manager/` to `.gitignore` **only** when `<repo>/.git` exists **and** at least one project MCP server is enabled. Symlinked `.claude/skills/<id>` entries are recorded in local `.git/info/exclude` so `git status` remains clean without modifying `.gitignore`. |
+| `~/.claude/hooks/mcp-oauth-headers.py` | Installed and referenced via `"headersHelper"` **only** when an enabled remote HTTP MCP server has an existing OAuth token entry in `~/.gemini/antigravity/mcp_oauth_tokens.json` and no static `Authorization` header. |
+
+> **Safety Invariant**: During sync and purge operations, `agymg` only removes POSIX symlinks in target skill/plugin directories—it never deletes real committed or standalone directories.
+
+---
+
 ## Features
 
 - **Master Vault (`~/.gemini/manager-vault/`)**: One local catalog for all MCP servers (`stdio` commands + remote HTTP/SSE endpoints), `SKILL.md` packages, and plugins.
 - **Zero-Config First-Run Bootstrap**: Automatically imports existing MCP servers and skills from both Claude Code (`~/.claude.json`, `~/.claude/skills/`) and Antigravity (`~/.gemini/config/mcp_config.json`, `~/.gemini/config/skills/`).
 - **Global Core vs. Per-Project Isolation**: Keep universal tools (e.g., `github`) in **Global Core** while isolating domain-specific MCPs (`stripe`, `supabase`, `playwright`) to the repositories that actually need them.
 - **Menubar Quick Popover & Global Hotkey (`⌃⌥A`)**: Detects your active IDE workspace automatically, surfaces stack-aware recommendations (`package.json`, `Package.swift`, `pyproject.toml`, `Cargo.toml`, `supabase/`), and lets you toggle tools without leaving your editor.
-- **Git & Secret Safety Audits**: Automatically appends `.agents/plugins/agy-manager/` rules to `.gitignore` before writing scoped `mcp_config.json` files so API tokens are never accidentally staged in Git.
+- **Git & Secret Safety Audits**: Protects `.agents/plugins/agy-manager/` in `.gitignore` when writing project MCP manifests and enforces `0600` owner-only permissions on generated credential configs.
 - **Live External Change Adoption**: Runs a lightweight 15-second reconciliation check so tools added via `claude mcp add`, `agy mcp`, or newly created skill folders are adopted back into your Vault seamlessly.
 - **Automatic & Manual Config Backups**: Before `agymg` touches any external config file for the first time, it snapshots your existing `.claude.json` and `mcp_config.json` into `~/.gemini/manager-vault/backups/snapshot-<timestamp>/` (retaining up to 10 snapshots while always preserving your initial `pre-first-sync` backup, plus one-click manual backups in **Settings → Master Vault**).
 
@@ -203,13 +220,16 @@ agymg set --global --disable-mcp linear
 # Copy agymg.app into /Applications (used after `brew install stankela16/tap/agymg`)
 agymg install-app
 
+# Restore symlinked skills/plugins to standalone folders & clean wrappers/hooks
+agymg uninstall --restore
+
 # Print CLI version
 agymg --version
 ```
 
 ### Optional: Proactive Claude Code `SessionStart` Hook
 
-Want Claude Code to surface missing Vault tools automatically when you open a repository? Add `agymg hook-session-start --format claude-text` to `~/.claude/settings.json` (or `agymg hook-session-start --format antigravity` for Antigravity hooks):
+Want Claude Code to surface missing Vault tools automatically when you open a repository? Add the read-only `agymg hook-session-start --format claude-text` command to `~/.claude/settings.json` (or `agymg hook-session-start --format antigravity` for Antigravity hooks):
 
 ```json
 {
@@ -261,12 +281,20 @@ For multi-profile setups, CI, or isolated testing without touching `~/.gemini`:
 
 ## Uninstall & Restore
 
-1. Quit `agymg` (`⌘Q` from the menubar popover).
-2. Remove the app and CLI symlink:
+1. Restore symlinked skills and plugins back into standalone physical folders and clean up `agymg` project wrappers and Claude hooks:
    ```bash
-   rm -rf /Applications/agymg.app /opt/homebrew/bin/agymg
+   agymg uninstall --restore
    ```
-3. *(Optional)* Restore any pre-sync backup from `~/.gemini/manager-vault/backups/` before removing `~/.gemini/manager-vault/`.
+   *(Pass `--purge-vault` as well if you also want to delete `~/.gemini/manager-vault/` and its configuration snapshots immediately.)*
+2. Remove the application bundle and CLI binary:
+   ```bash
+   # If installed via Homebrew:
+   brew uninstall agymg
+   rm -rf /Applications/agymg.app
+
+   # If installed via Scripts/install.sh:
+   rm -rf /Applications/agymg.app /opt/homebrew/bin/agymg ~/.local/bin/agymg
+   ```
 
 ---
 
@@ -275,7 +303,7 @@ For multi-profile setups, CI, or isolated testing without touching `~/.gemini`:
 Built with **Swift 6** (`strict-concurrency=complete`), **SwiftUI**, and **AppKit** using Swift Package Manager—zero external dependencies.
 
 - Read [AGENTS.md](AGENTS.md) for codebase layout and sync invariants.
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) for build, packaging, and test instructions (`swift test` runs 220+ sandboxed unit & integration tests).
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) for build, packaging, and test instructions (`swift test` runs sandboxed unit & integration tests).
 
 ## License
 

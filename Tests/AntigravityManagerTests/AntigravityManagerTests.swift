@@ -640,12 +640,13 @@ final class AntigravityManagerTests: XCTestCase {
         )
         state.projects = [initialProject]
 
-        // 1. Initial preview contains mcp-alpha but not mcp-beta
+        // 1. Initial preview contains mcp-alpha under mcpServers, not mcp-beta or legacy fake schema keys
         let initialView = RuntimeManifestPreviewView(project: initialProject, state: state)
         let initialJSON = initialView.manifestJSON
+        XCTAssertTrue(initialJSON.contains("\"mcpServers\""))
         XCTAssertTrue(initialJSON.contains("mcp-alpha"))
         XCTAssertFalse(initialJSON.contains("mcp-beta"))
-        XCTAssertTrue(initialJSON.contains("skill-x"))
+        XCTAssertFalse(initialJSON.contains("schemaVersion"))
 
         // 2. Toggle mcp-beta in project
         state.toggleProjectServer(projectId: initialProject.id, serverId: "mcp-beta")

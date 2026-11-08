@@ -424,9 +424,9 @@ final class M2_3ChallengerSafetyAuditTests: XCTestCase {
     }
 
     func testChallenger4_OneClickSyncRemediation_CuresWarningToPassed() async throws {
-        // Setup isolated project environment
+        // Setup isolated git repository environment
         let projDir = tempDir.appendingPathComponent("remediation-proj", isDirectory: true)
-        try fm.createDirectory(at: projDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: projDir.appendingPathComponent(".git", isDirectory: true), withIntermediateDirectories: true)
 
         let geminiDir = tempDir.appendingPathComponent("remediation-gemini", isDirectory: true)
         let vaultDir = geminiDir.appendingPathComponent("manager-vault", isDirectory: true)

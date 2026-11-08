@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Darwin
 
 public struct CLIExecutionResult: Sendable {
@@ -75,11 +76,21 @@ public struct CLISetResponse: Codable, Sendable, Equatable {
 }
 
 public enum CLIRunner {
+    public static var currentVersion: String {
+        if Bundle.main.bundleURL.pathExtension == "app",
+           let bundled = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+           !bundled.isEmpty {
+            return bundled
+        }
+        return PathConstants.appVersion
+    }
+
     public static let supportedSubcommands: Set<String> = [
         "brief",
         "set",
         "hook-session-start",
         "install-app",
+        "uninstall",
         "help",
         "--help",
         "-h",
@@ -176,8 +187,7 @@ public enum CLIRunner {
         case "help", "--help", "-h":
             return CLIExecutionResult(exitCode: 0, stdout: helpText)
         case "--version", "-v":
-            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-            return CLIExecutionResult(exitCode: 0, stdout: "agymg \(version)")
+            return CLIExecutionResult(exitCode: 0, stdout: "agymg \(currentVersion)")
         case "brief":
             return await handleBrief(
                 args: Array(args.dropFirst()),
@@ -199,6 +209,8 @@ public enum CLIRunner {
                 args: Array(args.dropFirst()),
                 currentDirectoryPath: currentDirectoryPath ?? FileManager.default.currentDirectoryPath
             )
+        case "uninstall":
+            return await handleUninstall(args: Array(args.dropFirst()))
         default:
             return CLIExecutionResult(exitCode: 1, stderr: "Unknown subcommand '\(subcommand)'.\n\n\(helpText)")
         }
@@ -227,11 +239,11 @@ public enum CLIRunner {
         await vault.initializeVaultIfNeeded()
 
         let rawPath = requestedPath ?? currentDirectoryPath
-        let snapshot = await buildSnapshot(for: rawPath, vault: vault, source: "cli-brief")
+        let snapshot = await buildSnapshot(for: rawPath, vault: vault, source: "cli-brief", readOnly: false)
 
         if outputJSON {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             if let data = try? encoder.encode(snapshot),
                let jsonString = String(data: data, encoding: .utf8) {
                 return CLIExecutionResult(exitCode: 0, stdout: jsonString)
@@ -550,9 +562,8 @@ public enum CLIRunner {
 
         let targetRawPath = requestedPath ?? currentDirectoryPath
         let vault = VaultService()
-        await vault.initializeVaultIfNeeded()
 
-        let snapshot = await buildSnapshot(for: targetRawPath, vault: vault, source: "session-start")
+        let snapshot = await buildSnapshot(for: targetRawPath, vault: vault, source: "session-start", readOnly: true)
 
         if format == "claude-text" {
             let text = formatClaudeSessionStartText(snapshot)
@@ -688,22 +699,116 @@ public enum CLIRunner {
         )
     }
 
+    // MARK: - Subcommand: uninstall
+    private static func handleUninstall(args: [String]) async -> CLIExecutionResult {
+        var restore = false
+        var purgeVault = false
+        var outputJSON = false
+
+        for arg in args {
+            switch arg {
+            case "--restore":
+                restore = true
+            case "--purge-vault":
+                purgeVault = true
+            case "--json":
+                outputJSON = true
+            default:
+                return CLIExecutionResult(
+                    exitCode: 1,
+                    stderr: "Unknown flag '\(arg)' for 'uninstall'. Usage: agymg uninstall --restore [--purge-vault] [--json]"
+                )
+            }
+        }
+
+        guard restore else {
+            return CLIExecutionResult(
+                exitCode: 1,
+                stderr: "Usage: agymg uninstall --restore [--purge-vault] [--json]\nPass --restore to convert symlinked skills/plugins back into standalone directories and clean agymg wrappers and hooks."
+            )
+        }
+
+        if !PathConstants.isRunningUnderTests {
+            let selfPID = ProcessInfo.processInfo.processIdentifier
+            let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.nikolastanojevic.agymg")
+            for app in runningApps where app.processIdentifier != selfPID {
+                _ = app.terminate()
+            }
+        }
+
+        var projects: [ProjectProfile] = []
+        if let data = try? Data(contentsOf: PathConstants.vaultProjectsFile),
+           let saved = try? JSONDecoder().decode([ProjectProfile].self, from: data) {
+            projects = saved
+        } else {
+            let vault = VaultService()
+            projects = await vault.loadSavedProjectsWithoutTCC()
+        }
+
+        let syncEngine = SyncEngine()
+        do {
+            let summary = try await syncEngine.uninstallAndRestore(projects: projects, purgeVault: purgeVault)
+            if outputJSON {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                let data = try encoder.encode(summary)
+                let str = String(data: data, encoding: .utf8) ?? "{}"
+                return CLIExecutionResult(exitCode: 0, stdout: str)
+            }
+
+            var lines: [String] = []
+            lines.append("Restored standalone agent configuration successfully:")
+            lines.append("- Restored global skills: \(summary.restoredGlobalSkills.count)")
+            lines.append("- Restored global plugins: \(summary.restoredGlobalPlugins.count)")
+            lines.append("- Removed project agy-manager wrappers: \(summary.removedProjectWrappers.count)")
+            lines.append("- Removed project Vault symlinks: \(summary.removedProjectSymlinks.count)")
+            lines.append("- Removed Claude OAuth helper script: \(summary.removedHelperScript ? "yes" : "no")")
+            lines.append("- Cleaned Claude SessionStart hooks: \(summary.cleanedClaudeHooks ? "yes" : "no")")
+            if summary.purgedVault {
+                lines.append("- Purged Master Vault: \(summary.vaultPath)")
+            } else {
+                lines.append("- Preserved Master Vault & backups at: \(summary.vaultPath) (pass --purge-vault to delete)")
+            }
+            lines.append("")
+            lines.append("To remove the app bundle and CLI binary:")
+            lines.append("  brew uninstall agymg")
+            lines.append("  rm -rf /Applications/agymg.app ~/Applications/agymg.app /opt/homebrew/bin/agymg /usr/local/bin/agymg ~/.local/bin/agymg")
+            return CLIExecutionResult(exitCode: 0, stdout: lines.joined(separator: "\n"))
+        } catch {
+            return CLIExecutionResult(exitCode: 1, stderr: "Uninstall restore failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Snapshot & Resolution Helpers
     private static func buildSnapshot(
         for rawPath: String,
         vault: VaultService,
-        source: String
+        source: String,
+        readOnly: Bool
     ) async -> CLIBriefResponse {
-        let projects = await vault.loadSavedProjectsUnconditional()
-        let (servers, _) = await vault.scanAndIngestServers(projects: projects)
+        let projects = await vault.loadSavedProjectsWithoutTCC(allowingCWD: rawPath)
+        let servers: [MCPServerDefinition]
+        if readOnly {
+            servers = await vault.loadServersReadOnly()
+        } else {
+            let safeProjects = projects.filter { !PathConstants.isTCCProtectedPath($0.path) || rawPath.hasPrefix($0.path) }
+            let (scanned, _) = await vault.scanAndIngestServers(projects: safeProjects)
+            servers = scanned
+        }
         let globalSelection = await vault.loadGlobalSelection()
 
         let skillScanner = SkillScannerService()
         let pluginScanner = PluginScannerService()
         let recService = ProjectRecommendationService()
 
-        let allSkills = skillScanner.scanVaultSkills()
-        let allPlugins = pluginScanner.scanAllPlugins(projects: projects)
+        let allSkills = skillScanner.scanVaultSkills(readOnly: readOnly)
+        let allPlugins: [PluginDefinition]
+        if readOnly {
+            allPlugins = pluginScanner.scanAllPlugins(projects: [], readOnly: true)
+        } else {
+            let safeProjects = projects.filter { !PathConstants.isTCCProtectedPath($0.path) || rawPath.hasPrefix($0.path) }
+            allPlugins = pluginScanner.scanAllPlugins(projects: safeProjects, readOnly: false)
+        }
 
         let (project, isRegistered) = resolveOrCreateProject(for: rawPath, in: projects)
         let localSkills = skillScanner.scanProjectLocalSkills(projectPath: project.path)
@@ -722,15 +827,18 @@ public enum CLIRunner {
             globalPluginIds: globalSelection.enabledPluginIds
         )
 
-        // Save active context & notify running menubar app
-        let context = ActiveWorkspaceContext(
-            projectPath: project.path,
-            projectId: project.id,
-            projectName: project.name,
-            source: source,
-            updatedAt: Date()
-        )
-        await vault.saveActiveContext(context)
+        // Save active context only if Vault already exists (when readOnly) or unconditionally for interactive brief
+        let vaultAlreadyExists = FileManager.default.fileExists(atPath: PathConstants.vaultDirectory.path)
+        if !readOnly || vaultAlreadyExists {
+            let context = ActiveWorkspaceContext(
+                projectPath: project.path,
+                projectId: project.id,
+                projectName: project.name,
+                source: source,
+                updatedAt: Date()
+            )
+            await vault.saveActiveContext(context)
+        }
         notifyMenuBarApp(
             projectPath: project.path,
             projectId: project.id,
@@ -821,28 +929,49 @@ public enum CLIRunner {
         in projects: [ProjectProfile]
     ) -> (project: ProjectProfile, isRegistered: Bool) {
         let fm = FileManager.default
+        let stdInput = URL(fileURLWithPath: rawPath).standardizedFileURL.path
         let canonicalInput = URL(fileURLWithPath: rawPath).resolvingSymlinksInPath().path
 
-        // 1. Match longest registered project path prefix (handles subdirectories and nested monorepo packages)
-        let sortedByDepth = projects.sorted {
-            URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path.count >
-            URL(fileURLWithPath: $1.path).resolvingSymlinksInPath().path.count
+        func safeProjectPath(_ projPath: String) -> String {
+            let stdProj = URL(fileURLWithPath: projPath).standardizedFileURL.path
+            if PathConstants.isTCCProtectedPath(projPath)
+                && stdInput != stdProj
+                && !stdInput.hasPrefix(stdProj + "/") {
+                return stdProj
+            }
+            return URL(fileURLWithPath: projPath).resolvingSymlinksInPath().path
         }
-        for proj in sortedByDepth {
-            let canonicalProj = URL(fileURLWithPath: proj.path).resolvingSymlinksInPath().path
-            if canonicalInput == canonicalProj || canonicalInput.hasPrefix(canonicalProj + "/") {
-                return (proj, true)
+
+        // 1. Match longest registered project path prefix (handles subdirectories and nested monorepo packages)
+        let annotated = projects.map { (proj: $0, canonical: safeProjectPath($0.path)) }
+            .sorted { $0.canonical.count > $1.canonical.count }
+        for entry in annotated {
+            if canonicalInput == entry.canonical || canonicalInput.hasPrefix(entry.canonical + "/") {
+                return (entry.proj, true)
             }
         }
 
-        // 2. Walk up to git root if inside an unregistered git repository
+        // 2. Walk up to git root if inside an unregistered git repository (without probing TCC-protected Desktop/Documents/Downloads)
         var currentURL = URL(fileURLWithPath: canonicalInput, isDirectory: true)
+        let homeStd = PathConstants.effectiveHomeDirectory.standardizedFileURL.path
         var stopPaths: Set<String> = [
             "/",
-            PathConstants.effectiveHomeDirectory.resolvingSymlinksInPath().path,
-            PathConstants.defaultProjectsDirectory.resolvingSymlinksInPath().path
+            homeStd,
+            "\(homeStd)/Desktop",
+            "\(homeStd)/Desktop/Projects",
+            "\(homeStd)/Documents",
+            "\(homeStd)/Downloads",
+            "\(homeStd)/Projects",
+            "\(homeStd)/Developer",
+            "\(homeStd)/Code",
+            "\(homeStd)/workspace"
         ]
-        if let authorizedRoot = ProjectFolderAccessManager.shared.authorizedDirectoryURL?.resolvingSymlinksInPath().path {
+        if let customProj = PathConstants.customProjectsDirectory?.resolvingSymlinksInPath().path {
+            stopPaths.insert(customProj)
+        } else if PathConstants.isRunningUnderTests || PathConstants.hasEnvironmentOverride {
+            stopPaths.insert(PathConstants.defaultProjectsDirectory.resolvingSymlinksInPath().path)
+        }
+        if let authorizedRoot = ProjectFolderAccessManager.shared.authorizedDirectoryURL?.standardizedFileURL.path {
             stopPaths.insert(authorizedRoot)
         }
         var resolvedRootURL = currentURL
@@ -862,8 +991,9 @@ public enum CLIRunner {
         let uniqueId: String
         if existingIds.contains(name) {
             let parentName = resolvedRootURL.deletingLastPathComponent().lastPathComponent
-            let candidate = parentName.isEmpty ? "\(name)-\(abs(resolvedRootURL.path.hashValue % 10000))" : "\(parentName)-\(name)"
-            uniqueId = existingIds.contains(candidate) ? "\(name)-\(abs(resolvedRootURL.path.hashValue % 10000))" : candidate
+            let shortHash = PathConstants.stableShortHash(resolvedRootURL.path, length: 6)
+            let candidate = parentName.isEmpty ? "\(name)-\(shortHash)" : "\(parentName)-\(name)"
+            uniqueId = existingIds.contains(candidate) ? "\(name)-\(shortHash)" : candidate
         } else {
             uniqueId = name
         }
@@ -874,6 +1004,7 @@ public enum CLIRunner {
         if let pluginFolders = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
             for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
                 let pluginName = pluginFolder.lastPathComponent
+                guard PathConstants.isSafeResourceId(pluginName) else { continue }
                 if pluginName != "agy-manager" {
                     ephemeral.enabledPluginIds.insert(pluginName)
                 }
@@ -881,7 +1012,7 @@ public enum CLIRunner {
                 if let data = try? Data(contentsOf: mcpFile),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let servers = json["mcpServers"] as? [String: Any] {
-                    for key in servers.keys {
+                    for key in servers.keys where PathConstants.isSafeResourceId(key) {
                         ephemeral.enabledMCPServerIds.insert(key)
                     }
                 }
@@ -891,8 +1022,10 @@ public enum CLIRunner {
         let skillsDir = resolvedRootURL.appendingPathComponent(".agents/skills", isDirectory: true)
         if let skillFolders = try? fm.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: nil) {
             for skillFolder in skillFolders where !skillFolder.lastPathComponent.hasPrefix(".") {
+                let skillName = skillFolder.lastPathComponent
+                guard PathConstants.isSafeResourceId(skillName) else { continue }
                 if (try? fm.destinationOfSymbolicLink(atPath: skillFolder.path)) != nil {
-                    ephemeral.enabledSkillIds.insert(skillFolder.lastPathComponent)
+                    ephemeral.enabledSkillIds.insert(skillName)
                 }
             }
         }
@@ -1008,7 +1141,7 @@ public enum CLIRunner {
     private static func formatSetOutput(_ response: CLISetResponse, asJSON: Bool) -> CLIExecutionResult {
         if asJSON {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             if let data = try? encoder.encode(response),
                let str = String(data: data, encoding: .utf8) {
                 return CLIExecutionResult(exitCode: 0, stdout: str)
@@ -1119,7 +1252,7 @@ public enum CLIRunner {
             ]
         ]
 
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .withoutEscapingSlashes]),
            let str = String(data: data, encoding: .utf8) {
             return str
         }
@@ -1139,6 +1272,7 @@ public enum CLIRunner {
       agymg set [--project <path> | --global] [options] [--json]
       agymg hook-session-start [--format antigravity|claude-text] [--project <path>]
       agymg install-app [--dest <dir>] [--source <path>]
+      agymg uninstall --restore [--purge-vault] [--json]
       agymg --version
 
     OPTIONS FOR 'set':
@@ -1151,5 +1285,10 @@ public enum CLIRunner {
       --enable-plugin <ids>    Comma-separated Vault plugin IDs to enable
       --disable-plugin <ids>   Comma-separated Vault plugin IDs to disable
       --json                   Output structured JSON response
+
+    OPTIONS FOR 'uninstall':
+      --restore                Restore symlinked skills/plugins to standalone directories and clean wrappers/hooks
+      --purge-vault            Also delete ~/.gemini/manager-vault (including configuration backups)
+      --json                   Output structured JSON summary
     """
 }

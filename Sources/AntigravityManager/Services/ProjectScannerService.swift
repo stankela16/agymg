@@ -17,9 +17,10 @@ public struct ProjectScannerService: Sendable {
             guard !canonicalSeen.contains(canonical), projectsByPath[path] == nil else { return }
             let uniqueId: String
             if usedIds.contains(name) {
+                let suffix = PathConstants.stableShortHash(canonical, length: 6)
                 let parentName = URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
-                let candidate = parentName.isEmpty ? "\(name)-\(abs(canonical.hashValue % 10000))" : "\(parentName)-\(name)"
-                uniqueId = usedIds.contains(candidate) ? "\(name)-\(abs(canonical.hashValue % 10000))" : candidate
+                let candidate = parentName.isEmpty ? "\(name)-\(suffix)" : "\(parentName)-\(name)"
+                uniqueId = usedIds.contains(candidate) ? "\(name)-\(suffix)" : candidate
             } else {
                 uniqueId = name
             }

@@ -277,12 +277,10 @@ final class StateReactivityTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(json["schemaVersion"] as? String, "2.1.0")
-        XCTAssertEqual(json["scope"] as? String, "Manifest Project")
-        XCTAssertEqual(json["masterVaultRef"] as? String, "~/.gemini/manager-vault/")
+        XCTAssertNil(json["schemaVersion"], "Preview must match real mcp_config.json without fake schemaVersion")
 
-        guard let serversDict = json["servers"] as? [String: [String: Any]] else {
-            XCTFail("Manifest must contain servers dictionary")
+        guard let serversDict = json["mcpServers"] as? [String: [String: Any]] else {
+            XCTFail("Manifest must contain mcpServers dictionary")
             return
         }
 
@@ -292,22 +290,14 @@ final class StateReactivityTests: XCTestCase {
         XCTAssertNotNil(serversDict["srv-beta"])
         XCTAssertNil(serversDict["srv-gamma"])
         XCTAssertEqual(serversDict["srv-alpha"]?["command"] as? String, "node")
-        XCTAssertEqual(serversDict["srv-alpha"]?["active"] as? Bool, true)
-
-        // Active skills count and sorting: ["skill-a", "skill-z"]
-        guard let activeSkills = json["activeSkills"] as? [String] else {
-            XCTFail("Manifest must contain activeSkills array")
-            return
-        }
-        XCTAssertEqual(activeSkills.count, 2)
-        XCTAssertEqual(activeSkills, ["skill-a", "skill-z"], "Skills must be sorted alphabetically")
+        XCTAssertEqual(serversDict["srv-alpha"]?["args"] as? [String], ["dist/index.js"])
 
         // Modify project: enable srv-gamma, disable srv-alpha
         project.enabledMCPServerIds = ["srv-beta", "srv-gamma"]
         let updatedJsonString = RuntimeManifestPreviewView.generateManifestJSON(project: project, servers: allServers)
         guard let updatedData = updatedJsonString.data(using: .utf8),
               let updatedJson = try JSONSerialization.jsonObject(with: updatedData) as? [String: Any],
-              let updatedServersDict = updatedJson["servers"] as? [String: [String: Any]] else {
+              let updatedServersDict = updatedJson["mcpServers"] as? [String: [String: Any]] else {
             XCTFail("Updated manifest must be valid JSON")
             return
         }

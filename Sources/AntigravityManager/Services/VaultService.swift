@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public struct GlobalSelection: Codable, Sendable {
     public var enabledMCPServerIds: Set<String>
@@ -33,8 +34,9 @@ public actor VaultService {
     public func initializeVaultIfNeeded() {
         let vaultDir = PathConstants.vaultDirectory
         if !fm.fileExists(atPath: vaultDir.path) {
-            try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+            try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
+        _ = Darwin.chmod(vaultDir.path, 0o700)
 
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
         if !fm.fileExists(atPath: vaultPluginsDir.path) {
@@ -63,7 +65,7 @@ public actor VaultService {
                 let data = try Data(contentsOf: PathConstants.globalMCPConfigFile)
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let servers = json["mcpServers"] as? [String: Any] {
-                    for (id, rawValue) in servers {
+                    for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
                         if let rawDict = rawValue as? [String: Any] {
                             let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
                             let def = MCPServerDefinition(id: id, config: jsonDict)
@@ -85,7 +87,7 @@ public actor VaultService {
         // 2. Bootstrap existing Claude Code MCP servers (~/.claude.json)
         for configFile in PathConstants.allClaudeConfigFiles where fm.fileExists(atPath: configFile.path) {
             let root = readJSONObject(at: configFile)
-            for (id, rawDict) in mcpServers(in: root) {
+            for (id, rawDict) in mcpServers(in: root) where PathConstants.isSafeResourceId(id) {
                 let converted = antigravityConfig(from: rawDict)
                 if var existing = masterServers[id] {
                     if mergeMissingCredentials(from: converted, into: &existing.config) {
@@ -98,7 +100,7 @@ public actor VaultService {
             }
             if let claudeProjects = root["projects"] as? [String: [String: Any]] {
                 for (_, projEntry) in claudeProjects {
-                    for (id, rawDict) in mcpServers(in: projEntry) where masterServers[id] == nil {
+                    for (id, rawDict) in mcpServers(in: projEntry) where PathConstants.isSafeResourceId(id) && masterServers[id] == nil {
                         masterServers[id] = MCPServerDefinition(id: id, config: antigravityConfig(from: rawDict))
                     }
                 }
@@ -106,18 +108,37 @@ public actor VaultService {
         }
 
         // 3. Bootstrap existing global skills from Antigravity (~/.gemini/config/skills) and Claude Code (~/.claude/skills)
+        // Adopt physical folders into the Vault and replace them with symlinks so toggles and edits work symmetrically.
         for skillsDir in [PathConstants.globalSkillsDirectory, PathConstants.claudeGlobalSkillsDirectory] {
             guard let items = try? fm.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: [.isDirectoryKey], options: []) else {
                 continue
             }
             for item in items where item.lastPathComponent != "synced" && !item.lastPathComponent.hasPrefix(".") {
+                let skillId = item.lastPathComponent
+                guard PathConstants.isSafeResourceId(skillId) else { continue }
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue else { continue }
                 let isLink = (try? fm.destinationOfSymbolicLink(atPath: item.path)) != nil
-                let skillId = item.lastPathComponent
                 let destURL = PathConstants.vaultSkillsDirectory.appendingPathComponent(skillId, isDirectory: true)
-                if !isLink && !fm.fileExists(atPath: destURL.path) {
-                    try? fm.copyItem(at: item, to: destURL)
+                if !isLink {
+                    if !fm.fileExists(atPath: destURL.path) {
+                        if (try? fm.moveItem(at: item, to: destURL)) != nil {
+                            try? fm.createSymbolicLink(at: item, withDestinationURL: destURL)
+                        } else if (try? fm.copyItem(at: item, to: destURL)) != nil {
+                            try? fm.removeItem(at: item)
+                            try? fm.createSymbolicLink(at: item, withDestinationURL: destURL)
+                        }
+                    } else {
+                        let conflictDir = PathConstants.vaultBackupsDirectory
+                            .appendingPathComponent("bootstrap-skill-conflicts", isDirectory: true)
+                        try? fm.createDirectory(at: conflictDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                        _ = Darwin.chmod(conflictDir.path, 0o700)
+                        let originTag = skillsDir.deletingLastPathComponent().lastPathComponent
+                        let backupDest = conflictDir.appendingPathComponent("\(originTag)_\(skillId)_\(UUID().uuidString.prefix(8))")
+                        if (try? fm.moveItem(at: item, to: backupDest)) != nil {
+                            try? fm.createSymbolicLink(at: item, withDestinationURL: destURL)
+                        }
+                    }
                 }
                 if fm.fileExists(atPath: destURL.path) || isLink {
                     initialGlobalSkillIds.insert(skillId)
@@ -139,7 +160,7 @@ public actor VaultService {
                         if let data = try? Data(contentsOf: mcpFile),
                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let servers = json["mcpServers"] as? [String: Any] {
-                            for (id, rawValue) in servers {
+                            for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
                                 if let rawDict = rawValue as? [String: Any], masterServers[id] == nil {
                                     let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
                                     masterServers[id] = MCPServerDefinition(id: id, config: jsonDict)
@@ -176,6 +197,25 @@ public actor VaultService {
         }
     }
 
+    public func loadServersReadOnly() -> [MCPServerDefinition] {
+        if fm.fileExists(atPath: PathConstants.vaultMCPFile.path) {
+            return loadServers()
+        }
+        var inMemory: [String: MCPServerDefinition] = [:]
+        if fm.fileExists(atPath: PathConstants.globalMCPConfigFile.path),
+           let data = try? Data(contentsOf: PathConstants.globalMCPConfigFile),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let servers = json["mcpServers"] as? [String: Any] {
+            for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
+                if let rawDict = rawValue as? [String: Any] {
+                    let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
+                    inMemory[id] = MCPServerDefinition(id: id, config: jsonDict)
+                }
+            }
+        }
+        return inMemory.values.sorted { $0.id < $1.id }
+    }
+
     public func scanAndIngestServers(projects: [ProjectProfile] = []) -> (servers: [MCPServerDefinition], newGlobalIds: Set<String>) {
         var masterServers: [String: MCPServerDefinition] = [:]
         for server in loadServers() {
@@ -190,7 +230,7 @@ public actor VaultService {
             if let data = try? Data(contentsOf: PathConstants.globalMCPConfigFile),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let servers = json["mcpServers"] as? [String: Any] {
-                for (id, rawValue) in servers {
+                for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
                     if let rawDict = rawValue as? [String: Any] {
                         let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
                         if var existing = masterServers[id] {
@@ -257,13 +297,13 @@ public actor VaultService {
         let enabledBefore = selection.enabledMCPServerIds
 
         func addToCatalog(_ id: String, _ raw: [String: Any]) {
-            guard master[id] == nil else { return }
+            guard PathConstants.isSafeResourceId(id), master[id] == nil else { return }
             master[id] = MCPServerDefinition(id: id, config: antigravityConfig(from: raw))
             result.serverIds.insert(id)
         }
 
         // 1. Antigravity: the Manager writes this file, so a toggle that differs from the selection was made there.
-        for (id, raw) in mcpServers(in: readJSONObject(at: PathConstants.globalMCPConfigFile)) where !ignoredServerIds.contains(id) {
+        for (id, raw) in mcpServers(in: readJSONObject(at: PathConstants.globalMCPConfigFile)) where PathConstants.isSafeResourceId(id) && !ignoredServerIds.contains(id) {
             addToCatalog(id, raw)
             let isEnabled = !((raw["disabled"] as? Bool) ?? false)
             guard isEnabled != selection.enabledMCPServerIds.contains(id) else { continue }
@@ -278,7 +318,7 @@ public actor VaultService {
         // 2. Claude Code: `claude mcp add` writes to user scope, or to the project entry by default.
         for configFile in PathConstants.allClaudeConfigFiles {
             let root = readJSONObject(at: configFile)
-            for (id, raw) in mcpServers(in: root) where !ignoredServerIds.contains(id) {
+            for (id, raw) in mcpServers(in: root) where PathConstants.isSafeResourceId(id) && !ignoredServerIds.contains(id) {
                 addToCatalog(id, raw)
                 if !enabledBefore.contains(id), selection.enabledMCPServerIds.insert(id).inserted {
                     result.serverIds.insert(id)
@@ -288,7 +328,7 @@ public actor VaultService {
             let claudeProjects = root["projects"] as? [String: [String: Any]] ?? [:]
             for index in updatedProjects.indices {
                 let projectServers = mcpServers(in: claudeProjects[updatedProjects[index].path] ?? [:])
-                for (id, raw) in projectServers where !ignoredServerIds.contains(id) {
+                for (id, raw) in projectServers where PathConstants.isSafeResourceId(id) && !ignoredServerIds.contains(id) {
                     addToCatalog(id, raw)
                     if updatedProjects[index].enabledMCPServerIds.insert(id).inserted {
                         result.projectIds.insert(updatedProjects[index].id)
@@ -302,15 +342,17 @@ public actor VaultService {
         for directory in [PathConstants.claudeGlobalSkillsDirectory, PathConstants.globalSkillsDirectory] {
             let items = (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
             for item in items where item.lastPathComponent != "synced" && !item.lastPathComponent.hasPrefix(".") {
+                let skillId = item.lastPathComponent
+                guard PathConstants.isSafeResourceId(skillId) else { continue }
                 let skillFile = item.appendingPathComponent("SKILL.md")
-                let vaultURL = PathConstants.vaultSkillsDirectory.appendingPathComponent(item.lastPathComponent)
+                let vaultURL = PathConstants.vaultSkillsDirectory.appendingPathComponent(skillId)
                 guard (try? fm.destinationOfSymbolicLink(atPath: item.path)) == nil,
                       !fm.fileExists(atPath: vaultURL.path),
                       let modified = (try? fm.attributesOfItem(atPath: skillFile.path))?[.modificationDate] as? Date,
                       now.timeIntervalSince(modified) >= minimumSkillAge else { continue } // the agent may still be writing it
                 if (try? fm.moveItem(at: item, to: vaultURL)) != nil {
-                    selection.enabledSkillIds.insert(item.lastPathComponent)
-                    result.skillIds.insert(item.lastPathComponent)
+                    selection.enabledSkillIds.insert(skillId)
+                    result.skillIds.insert(skillId)
                 }
             }
         }
@@ -354,7 +396,7 @@ public actor VaultService {
               let servers = json["mcpServers"] as? [String: Any] else {
             return
         }
-        for (id, rawValue) in servers {
+        for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
             if let rawDict = rawValue as? [String: Any] {
                 let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
                 if var existing = masterServers[id] {
@@ -397,15 +439,21 @@ public actor VaultService {
         return anyChanged
     }
 
+    private func ensureVaultDirectoryPermissions() {
+        let vaultDir = PathConstants.vaultDirectory
+        if !fm.fileExists(atPath: vaultDir.path) {
+            try? fm.createDirectory(at: vaultDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+        _ = Darwin.chmod(vaultDir.path, 0o700)
+    }
+
     public func saveServers(_ servers: [MCPServerDefinition]) {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         do {
             let data = try encoder.encode(servers)
-            if !fm.fileExists(atPath: PathConstants.vaultDirectory.path) {
-                try? fm.createDirectory(at: PathConstants.vaultDirectory, withIntermediateDirectories: true)
-            }
-            try data.write(to: PathConstants.vaultMCPFile, options: .atomic)
+            ensureVaultDirectoryPermissions()
+            try PathConstants.writeSecureData(data, to: PathConstants.vaultMCPFile, permissions: 0o600)
         } catch {
             if !PathConstants.isRunningUnderTests {
                 print("VaultService error saving servers: \(error)")
@@ -453,9 +501,10 @@ public actor VaultService {
 
     public func saveProjects(_ projects: [ProjectProfile]) {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(projects) {
-            try? data.write(to: PathConstants.vaultProjectsFile, options: .atomic)
+            ensureVaultDirectoryPermissions()
+            try? PathConstants.writeSecureData(data, to: PathConstants.vaultProjectsFile, permissions: 0o600)
         }
     }
 
@@ -469,19 +518,22 @@ public actor VaultService {
 
     public func saveGlobalSelection(_ selection: GlobalSelection) {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(selection) {
-            try? data.write(to: PathConstants.vaultGlobalConfigFile, options: .atomic)
+            ensureVaultDirectoryPermissions()
+            try? PathConstants.writeSecureData(data, to: PathConstants.vaultGlobalConfigFile, permissions: 0o600)
         }
     }
 
     public func deleteServer(id: String) {
+        guard PathConstants.isSafeResourceId(id) else { return }
         var servers = loadServers()
         servers.removeAll { $0.id == id }
         saveServers(servers)
     }
 
     public func deleteSkill(id: String) {
+        guard PathConstants.isSafeResourceId(id) else { return }
         let vaultSkillURL = PathConstants.vaultSkillsDirectory.appendingPathComponent(id)
         if fm.fileExists(atPath: vaultSkillURL.path) {
             try? fm.removeItem(at: vaultSkillURL)
@@ -489,15 +541,73 @@ public actor VaultService {
     }
 
     public func deletePlugin(id: String) {
+        guard PathConstants.isSafeResourceId(id) else { return }
         let vaultPluginURL = PathConstants.vaultPluginsDirectory.appendingPathComponent(id)
         if fm.fileExists(atPath: vaultPluginURL.path) {
             try? fm.removeItem(at: vaultPluginURL)
         }
     }
 
+    public func loadSavedProjectsWithoutTCC(allowingCWD cwd: String? = nil) -> [ProjectProfile] {
+        var discovered: [ProjectProfile] = []
+        if PathConstants.isRunningUnderTests || PathConstants.hasEnvironmentOverride || PathConstants.customProjectsDirectory != nil {
+            let scanner = ProjectScannerService()
+            discovered = scanner.discoverProjects(in: PathConstants.defaultProjectsDirectory)
+        }
+
+        guard let data = try? Data(contentsOf: PathConstants.vaultProjectsFile),
+              let savedList = try? JSONDecoder().decode([ProjectProfile].self, from: data) else {
+            return discovered
+        }
+
+        let normalizedCWD = cwd.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+
+        func canSafelyStat(_ path: String) -> Bool {
+            if !PathConstants.isTCCProtectedPath(path) {
+                return true
+            }
+            guard let normalizedCWD else { return false }
+            let stdPath = URL(fileURLWithPath: path).standardizedFileURL.path
+            return normalizedCWD == stdPath || normalizedCWD.hasPrefix("\(stdPath)/")
+        }
+
+        var mergedByCanonicalPath: [String: ProjectProfile] = [:]
+        for saved in savedList {
+            if canSafelyStat(saved.path) {
+                guard fm.fileExists(atPath: saved.path) else { continue }
+                let key = URL(fileURLWithPath: saved.path).resolvingSymlinksInPath().path
+                mergedByCanonicalPath[key] = saved
+            } else {
+                let key = URL(fileURLWithPath: saved.path).standardizedFileURL.path
+                mergedByCanonicalPath[key] = saved
+            }
+        }
+
+        for disc in discovered {
+            let key = URL(fileURLWithPath: disc.path).resolvingSymlinksInPath().path
+            if var existing = mergedByCanonicalPath[key] {
+                existing.enabledMCPServerIds.formUnion(disc.enabledMCPServerIds)
+                existing.enabledSkillIds.formUnion(disc.enabledSkillIds)
+                existing.enabledPluginIds.formUnion(disc.enabledPluginIds)
+                mergedByCanonicalPath[key] = existing
+            } else {
+                mergedByCanonicalPath[key] = disc
+            }
+        }
+
+        return Array(mergedByCanonicalPath.values).sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
     public func loadSavedProjectsUnconditional() -> [ProjectProfile] {
         let scanner = ProjectScannerService()
-        let discovered = scanner.discoverProjects(in: PathConstants.defaultProjectsDirectory)
+        let defaultDir = PathConstants.defaultProjectsDirectory
+        let shouldScanDefault = PathConstants.isRunningUnderTests
+            || PathConstants.hasEnvironmentOverride
+            || PathConstants.customProjectsDirectory != nil
+            || !PathConstants.isTCCProtectedPath(defaultDir.path)
+            || ProjectFolderAccessManager.shared.isAuthorized
+        let scanRoot = ProjectFolderAccessManager.shared.authorizedDirectoryURL ?? defaultDir
+        let discovered = shouldScanDefault ? scanner.discoverProjects(in: scanRoot, scanDefaultWhenNil: false) : []
 
         guard let data = try? Data(contentsOf: PathConstants.vaultProjectsFile),
               let savedList = try? JSONDecoder().decode([ProjectProfile].self, from: data) else {
@@ -505,9 +615,15 @@ public actor VaultService {
         }
 
         var mergedByCanonicalPath: [String: ProjectProfile] = [:]
-        for saved in savedList where fm.fileExists(atPath: saved.path) {
-            let key = URL(fileURLWithPath: saved.path).resolvingSymlinksInPath().path
-            mergedByCanonicalPath[key] = saved
+        for saved in savedList {
+            if !PathConstants.isTCCProtectedPath(saved.path) || ProjectFolderAccessManager.shared.isAuthorized {
+                guard fm.fileExists(atPath: saved.path) else { continue }
+                let key = URL(fileURLWithPath: saved.path).resolvingSymlinksInPath().path
+                mergedByCanonicalPath[key] = saved
+            } else {
+                let key = URL(fileURLWithPath: saved.path).standardizedFileURL.path
+                mergedByCanonicalPath[key] = saved
+            }
         }
 
         for disc in discovered {
@@ -527,13 +643,11 @@ public actor VaultService {
 
     public func saveActiveContext(_ context: ActiveWorkspaceContext) {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
-        if !fm.fileExists(atPath: PathConstants.vaultDirectory.path) {
-            try? fm.createDirectory(at: PathConstants.vaultDirectory, withIntermediateDirectories: true)
-        }
+        ensureVaultDirectoryPermissions()
         if let data = try? encoder.encode(context) {
-            try? data.write(to: PathConstants.activeContextFile, options: .atomic)
+            try? PathConstants.writeSecureData(data, to: PathConstants.activeContextFile, permissions: 0o600)
         }
     }
 

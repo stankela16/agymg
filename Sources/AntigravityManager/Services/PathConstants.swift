@@ -1,9 +1,104 @@
 import Foundation
+import CryptoKit
 import Darwin
 
 public enum PathConstants {
+    public static let appVersion = "1.0.1"
+
     public nonisolated(unsafe) static var customGeminiDirectory: URL? = nil
     public nonisolated(unsafe) static var customProjectsDirectory: URL? = nil
+
+    public static func stableShortHash(_ input: String, length: Int = 8) -> String {
+        let digest = SHA256.hash(data: Data(input.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return String(hex.prefix(max(1, length)))
+    }
+
+    public static func isSafeResourceId(_ id: String) -> Bool {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed == id,
+              id != ".",
+              id != "..",
+              !id.contains("/"),
+              !id.contains("\\"),
+              !id.contains("\0") else {
+            return false
+        }
+        return true
+    }
+
+    public static func isTCCProtectedPath(_ path: String) -> Bool {
+        guard !isRunningUnderTests && !hasEnvironmentOverride && customProjectsDirectory == nil else {
+            return false
+        }
+        let home = homeDirectory.standardizedFileURL.path
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        for folder in ["Desktop", "Documents", "Downloads"] {
+            let prefix = "\(home)/\(folder)"
+            if standardized == prefix || standardized.hasPrefix("\(prefix)/") {
+                return true
+            }
+        }
+        return false
+    }
+
+    public static func writeSecureData(
+        _ data: Data,
+        to url: URL,
+        permissions: Int = 0o600,
+        preserveExistingPermissions: Bool = false
+    ) throws {
+        let fm = FileManager.default
+        let canonicalURL = url.resolvingSymlinksInPath()
+        let parentDir = canonicalURL.deletingLastPathComponent()
+        if !fm.fileExists(atPath: parentDir.path) {
+            try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        }
+
+        let targetMode: Int
+        if preserveExistingPermissions,
+           let attrs = try? fm.attributesOfItem(atPath: canonicalURL.path),
+           let existingMode = (attrs[.posixPermissions] as? NSNumber)?.intValue {
+            targetMode = existingMode
+        } else {
+            targetMode = permissions
+        }
+
+        let tmpURL = parentDir.appendingPathComponent(".agymg_tmp_\(UUID().uuidString)")
+        guard fm.createFile(atPath: tmpURL.path, contents: nil, attributes: [.posixPermissions: targetMode]) else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(errno),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create temporary file at \(tmpURL.path)"]
+            )
+        }
+        _ = Darwin.chmod(tmpURL.path, mode_t(targetMode))
+
+        do {
+            let handle = try FileHandle(forWritingTo: tmpURL)
+            do {
+                try handle.write(contentsOf: data)
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            if Darwin.rename(tmpURL.path, canonicalURL.path) != 0 {
+                let errCode = errno
+                try? fm.removeItem(at: tmpURL)
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(errCode),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to atomically rename temporary file to \(canonicalURL.path)"]
+                )
+            }
+            _ = Darwin.chmod(canonicalURL.path, mode_t(targetMode))
+        } catch {
+            try? fm.removeItem(at: tmpURL)
+            throw error
+        }
+    }
 
     public static var isRunningUnderTests: Bool {
         NSClassFromString("XCTestCase") != nil ||
