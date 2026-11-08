@@ -20,7 +20,10 @@ let package = Package(
         .testTarget(
             name: "AntigravityManagerTests",
             dependencies: ["AntigravityManager"],
-            path: "Tests/AntigravityManagerTests"
+            path: "Tests/AntigravityManagerTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
+            ]
         )
     ]
 )
