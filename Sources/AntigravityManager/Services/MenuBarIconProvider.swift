@@ -6,6 +6,90 @@ import AppKit
 @MainActor
 public enum MenuBarIconProvider {
 
+    /// Resolves bundled resources safely across packaged `.app` bundles, Homebrew `libexec/agymg.app`,
+    /// unpackaged SwiftPM builds, and `swift test` without invoking SwiftPM's trapping resource accessor.
+    public static func resourceURL(
+        forResource name: String,
+        withExtension ext: String,
+        appBundleURL: URL? = nil
+    ) -> URL? {
+        let fm = FileManager.default
+        let bundleName = "agymg_AntigravityManager.bundle"
+
+        if let appBundleURL {
+            if let appBundle = Bundle(url: appBundleURL),
+               let url = appBundle.url(forResource: name, withExtension: ext) {
+                return url
+            }
+            let directFile = appBundleURL.appendingPathComponent("Contents/Resources/\(name).\(ext)")
+            if fm.fileExists(atPath: directFile.path) {
+                return directFile
+            }
+            let nestedBundleURL = appBundleURL.appendingPathComponent("Contents/Resources/\(bundleName)")
+            if let nestedBundle = Bundle(url: nestedBundleURL),
+               let url = nestedBundle.url(forResource: name, withExtension: ext) {
+                return url
+            }
+            return nil
+        }
+
+        // 1. Packaged .app main bundle resources
+        if let url = Bundle.main.url(forResource: name, withExtension: ext) {
+            return url
+        }
+
+        let directMainResource = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(name).\(ext)")
+        if fm.fileExists(atPath: directMainResource.path) {
+            return directMainResource
+        }
+
+        // 2. Embedded or sibling SwiftPM resource bundles (including symlinked CLI invocations)
+        var candidateBundleURLs: [URL] = []
+        if let resURL = Bundle.main.resourceURL {
+            candidateBundleURLs.append(resURL.appendingPathComponent(bundleName))
+        }
+        candidateBundleURLs.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/\(bundleName)"))
+        candidateBundleURLs.append(Bundle.main.bundleURL.appendingPathComponent(bundleName))
+
+        if let execURL = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+            let contentsDir = execURL.deletingLastPathComponent().deletingLastPathComponent()
+            let execDirectResource = contentsDir.appendingPathComponent("Resources/\(name).\(ext)")
+            if fm.fileExists(atPath: execDirectResource.path) {
+                return execDirectResource
+            }
+            candidateBundleURLs.append(contentsDir.appendingPathComponent("Resources/\(bundleName)"))
+            candidateBundleURLs.append(execURL.deletingLastPathComponent().appendingPathComponent(bundleName))
+        }
+
+        for bundleURL in candidateBundleURLs {
+            if let bundle = Bundle(url: bundleURL),
+               let url = bundle.url(forResource: name, withExtension: ext) {
+                return url
+            }
+        }
+
+        // 3. Loaded bundles fallback (e.g. XCTest runner where .xctest sits beside agymg_AntigravityManager.bundle)
+        for loadedBundle in Bundle.allBundles {
+            if let url = loadedBundle.url(forResource: name, withExtension: ext) {
+                return url
+            }
+            if let resURL = loadedBundle.resourceURL,
+               let nested = Bundle(url: resURL.appendingPathComponent(bundleName)),
+               let url = nested.url(forResource: name, withExtension: ext) {
+                return url
+            }
+            let siblingURL = loadedBundle.bundleURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(bundleName)
+            if let siblingBundle = Bundle(url: siblingURL),
+               let url = siblingBundle.url(forResource: name, withExtension: ext) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
     public static let icon: NSImage? = {
         let size = NSSize(width: 18, height: 18)
 
@@ -15,52 +99,18 @@ public enum MenuBarIconProvider {
             return img
         }
 
-        // 1. Try MenuBarIconTemplate from Bundle.module (SwiftPM)
-        #if SWIFT_PACKAGE
-        if let url = Bundle.module.url(forResource: "MenuBarIconTemplate", withExtension: "png") ??
-                     Bundle.module.url(forResource: "MenuBarIconTemplate@2x", withExtension: "png"),
-           let img = NSImage(contentsOf: url) {
-            return prepareTemplate(img)
-        }
-        if let url = Bundle.module.url(forResource: "MenuBarLogo", withExtension: "png") ??
-                     Bundle.module.url(forResource: "MenuBarLogo@2x", withExtension: "png") ??
-                     Bundle.module.url(forResource: "AppLogo", withExtension: "png"),
-           let img = NSImage(contentsOf: url) {
-            return prepareTemplate(img)
-        }
-        #endif
-
-        // 2. Try App Bundle Resources
-        if let url = Bundle.main.url(forResource: "MenuBarIconTemplate", withExtension: "png") ??
-                     Bundle.main.url(forResource: "MenuBarIconTemplate@2x", withExtension: "png"),
-           let img = NSImage(contentsOf: url) {
-            return prepareTemplate(img)
-        }
-        if let url = Bundle.main.url(forResource: "MenuBarLogo", withExtension: "png") ??
-                     Bundle.main.url(forResource: "MenuBarLogo@2x", withExtension: "png") ??
-                     Bundle.main.url(forResource: "AppLogo", withExtension: "png"),
-           let img = NSImage(contentsOf: url) {
-            return prepareTemplate(img)
-        }
-
-        // 3. Try direct Contents/Resources path in .app bundle
-        let templateURL2x = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuBarIconTemplate@2x.png")
-        if let img = NSImage(contentsOf: templateURL2x) {
-            return prepareTemplate(img)
-        }
-        let templateURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuBarIconTemplate.png")
-        if let img = NSImage(contentsOf: templateURL) {
-            return prepareTemplate(img)
-        }
-
-        let directURL2x = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuBarLogo@2x.png")
-        if let img = NSImage(contentsOf: directURL2x) {
-            return prepareTemplate(img)
-        }
-
-        let directURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/AppLogo.png")
-        if let img = NSImage(contentsOf: directURL) {
-            return prepareTemplate(img)
+        let candidates = [
+            "MenuBarIconTemplate",
+            "MenuBarIconTemplate@2x",
+            "MenuBarLogo",
+            "MenuBarLogo@2x",
+            "AppLogo"
+        ]
+        for candidate in candidates {
+            if let url = resourceURL(forResource: candidate, withExtension: "png"),
+               let img = NSImage(contentsOf: url) {
+                return prepareTemplate(img)
+            }
         }
 
         // Fallback to system symbol

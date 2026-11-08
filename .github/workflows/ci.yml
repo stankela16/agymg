@@ -17,7 +17,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Swift version
         run: swift --version
@@ -30,3 +30,20 @@ jobs:
 
       - name: Run unit test suite
         run: swift test
+
+      - name: Verify standalone .app bundle without .build directory
+        run: |
+          STAGE_APP="$RUNNER_TEMP/agymg.app"
+          rm -rf "$STAGE_APP"
+          ditto ./agymg.app "$STAGE_APP"
+          rm -rf ./.build ./agymg.app ./agymg.zip
+          codesign --verify --deep --strict "$STAGE_APP"
+          "$STAGE_APP/Contents/MacOS/agymg" --version
+          mkdir -p "$RUNNER_TEMP/sandbox/.gemini" "$RUNNER_TEMP/sandbox/Projects"
+          AGYMG_GEMINI_DIR="$RUNNER_TEMP/sandbox/.gemini" \
+          AGYMG_PROJECTS_DIR="$RUNNER_TEMP/sandbox/Projects" \
+          "$STAGE_APP/Contents/MacOS/agymg" &
+          APP_PID=$!
+          sleep 2
+          kill -0 "$APP_PID"
+          kill "$APP_PID" || true

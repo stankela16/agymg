@@ -453,6 +453,44 @@ final class OpenSourceReadinessTests: XCTestCase {
             "package_app.sh must pass --disable-sandbox to swift build so Homebrew sandbox builds succeed"
         )
 
+        // Verify real PNG resources resolve under swift test and inside standalone .app bundles without Bundle.module
+        XCTAssertNotNil(
+            MenuBarIconProvider.resourceURL(forResource: "MenuBarIconTemplate", withExtension: "png"),
+            "MenuBarIconTemplate.png must resolve under XCTest without Bundle.module"
+        )
+        XCTAssertNotNil(
+            MenuBarIconProvider.resourceURL(forResource: "AppLogo", withExtension: "png"),
+            "AppLogo.png must resolve under XCTest without Bundle.module"
+        )
+
+        let standaloneApp = sandboxDir.appendingPathComponent("Standalone.app", isDirectory: true)
+        let standaloneRes = standaloneApp.appendingPathComponent("Contents/Resources", isDirectory: true)
+        try fm.createDirectory(at: standaloneRes, withIntermediateDirectories: true)
+        let dummyPNG = standaloneRes.appendingPathComponent("AppLogo.png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: dummyPNG)
+        XCTAssertEqual(
+            MenuBarIconProvider.resourceURL(forResource: "AppLogo", withExtension: "png", appBundleURL: standaloneApp)?.resolvingSymlinksInPath().path,
+            dummyPNG.resolvingSymlinksInPath().path,
+            "Standalone .app bundle must resolve Contents/Resources assets without relying on .build/"
+        )
+        XCTAssertNil(
+            MenuBarIconProvider.resourceURL(forResource: "MissingAsset", withExtension: "png", appBundleURL: standaloneApp),
+            "Missing asset in standalone .app bundle must return nil instead of trapping"
+        )
+
+        // Forbid SwiftPM's fatalError-throwing Bundle.module in Sources/ (crashes packaged .app after temp build cleanup)
+        let sourcesRoot = repoRoot.appendingPathComponent("Sources", isDirectory: true)
+        if let srcEnum = fm.enumerator(at: sourcesRoot, includingPropertiesForKeys: [.isRegularFileKey]) {
+            while let fileURL = srcEnum.nextObject() as? URL {
+                guard fileURL.pathExtension == "swift" else { continue }
+                let content = try String(contentsOf: fileURL, encoding: .utf8)
+                XCTAssertFalse(
+                    content.contains("Bundle." + "module"),
+                    "Sources file \(fileURL.lastPathComponent) must not reference Bundle.module (traps in packaged .app when .build is deleted)"
+                )
+            }
+        }
+
         // Verify every `agymg <subcommand>` example in README.md is a real supported CLI subcommand
         let readmeText = try String(contentsOf: repoRoot.appendingPathComponent("README.md"), encoding: .utf8)
         for rawLine in readmeText.components(separatedBy: .newlines) {

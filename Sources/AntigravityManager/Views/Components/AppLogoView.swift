@@ -3,6 +3,7 @@ import AppKit
 
 /// Apple HIG compliant logo view for Antigravity Manager.
 /// Uses a continuous superellipse rounded rectangle with zero I/O in `body`.
+@MainActor
 public struct AppLogoView: View {
     public let size: CGFloat
     public let cornerRadius: CGFloat
@@ -10,24 +11,10 @@ public struct AppLogoView: View {
 
     // Cache the image statically in memory so zero I/O occurs during SwiftUI body evaluation
     private static let cachedImage: NSImage? = {
-        #if SWIFT_PACKAGE
-        if let moduleURL = Bundle.module.url(forResource: "AppLogo", withExtension: "png"),
-           let img = NSImage(contentsOf: moduleURL) {
-            return img
+        guard let url = MenuBarIconProvider.resourceURL(forResource: "AppLogo", withExtension: "png") else {
+            return nil
         }
-        #endif
-
-        if let appResourceURL = Bundle.main.url(forResource: "AppLogo", withExtension: "png"),
-           let img = NSImage(contentsOf: appResourceURL) {
-            return img
-        }
-
-        let directURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/AppLogo.png")
-        if let img = NSImage(contentsOf: directURL) {
-            return img
-        }
-
-        return nil
+        return NSImage(contentsOf: url)
     }()
 
     public init(size: CGFloat = 22, cornerRadius: CGFloat = 5.5, showBorder: Bool = true) {
