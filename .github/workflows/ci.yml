@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: macOS Build & Test (Swift 6 Strict Concurrency)
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build release binary with strict concurrency
+        run: swift build -c release -Xswiftc -strict-concurrency=complete
+
+      - name: Package macOS .app bundle
+        run: ./Scripts/package_app.sh release
+
+      - name: Run unit test suite
+        run: swift test

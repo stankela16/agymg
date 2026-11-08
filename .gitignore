@@ -1,0 +1,15 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+*.app
+*.zip
+
+# Local AI agent contexts, private design mockups & local-only rules
+.agents/
+.claude/
+GEMINI.md
+StitchDesigns/
