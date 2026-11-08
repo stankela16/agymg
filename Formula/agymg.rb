@@ -2,7 +2,7 @@ class Agymg < Formula
   desc "Share MCP servers, skills, and plugins across Claude Code and Antigravity"
   homepage "https://github.com/stankela16/agymg"
   url "https://github.com/stankela16/agymg/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "04349ffdad4284be9d5b48eedc591202960c490facdecb5475185e9023d04e1a"
+  sha256 "7cb198399bfe6476e5a5bce3ebef355ca6bbf77f891c18546f655f908dc72704"
   license "MIT"
   head "https://github.com/stankela16/agymg.git", branch: "main"
 
