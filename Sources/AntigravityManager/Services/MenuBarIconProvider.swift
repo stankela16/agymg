@@ -3,6 +3,7 @@ import AppKit
 
 /// Provides the high-resolution branded menu bar icon for Antigravity Manager.
 /// Follows Apple HIG standards with zero I/O on re-renders.
+@MainActor
 public enum MenuBarIconProvider {
 
     public static let icon: NSImage? = {

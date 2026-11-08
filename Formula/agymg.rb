@@ -6,7 +6,6 @@ class Agymg < Formula
   license "MIT"
   head "https://github.com/stankela16/agymg.git", branch: "main"
 
-  depends_on :macos
   depends_on macos: :sonoma
 
   def install

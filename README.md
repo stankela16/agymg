@@ -69,8 +69,7 @@ This installs `/Applications/agymg.app` and links the `agymg` CLI into `/opt/hom
 ### Option 2 — Homebrew
 
 ```bash
-brew tap stankela16/agymg https://github.com/stankela16/agymg
-brew install agymg
+brew install stankela16/tap/agymg
 agymg install-app
 ```
 
@@ -201,7 +200,7 @@ agymg set --project . --enable-mcp playwright --enable-skill react-perf
 # Enable or disable Vault resources globally across all workspaces
 agymg set --global --disable-mcp linear
 
-# Copy agymg.app into /Applications (used after `brew install agymg`)
+# Copy agymg.app into /Applications (used after `brew install stankela16/tap/agymg`)
 agymg install-app
 
 # Print CLI version
