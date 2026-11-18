@@ -31,7 +31,7 @@ Define your MCP servers, skills, and plugins **once** in a local Master Vault—
     </td>
     <td width="36%" valign="top">
       <img src="docs/assets/menubar-popover.png" alt="MenuBar Quick Popover" width="100%" />
-      <p align="center"><sub><b>Menubar Popover (<code>⌃⌥A</code>)</b> — Instant toggles and stack-aware recommendations.</sub></p>
+      <p align="center"><sub><b>Menubar Popover</b> — Instant toggles and stack-aware recommendations.</sub></p>
     </td>
   </tr>
 </table>
@@ -193,7 +193,7 @@ And because both `.agents/skills/react-perf` and `.claude/skills/react-perf` are
 - **Master Vault (`~/.gemini/manager-vault/`)**: One local catalog for all MCP servers (`stdio` commands + remote HTTP/SSE endpoints), `SKILL.md` packages, and plugins.
 - **Zero-Config First-Run Bootstrap**: Automatically imports existing MCP servers and skills from both Claude Code (`~/.claude.json`, `~/.claude/skills/`) and Antigravity (`~/.gemini/config/mcp_config.json`, `~/.gemini/config/skills/`).
 - **Global Core vs. Per-Project Isolation**: Keep universal tools (e.g., `github`) in **Global Core** while isolating domain-specific MCPs (`stripe`, `supabase`, `playwright`) to the repositories that actually need them.
-- **Menubar Quick Popover & Global Hotkey (`⌃⌥A`)**: Detects your active IDE workspace automatically, surfaces stack-aware recommendations (`package.json`, `Package.swift`, `pyproject.toml`, `Cargo.toml`, `supabase/`), and lets you toggle tools without leaving your editor.
+- **Menubar Quick Popover**: Detects your active IDE workspace automatically, surfaces stack-aware recommendations (`package.json`, `Package.swift`, `pyproject.toml`, `Cargo.toml`, `supabase/`), and lets you toggle tools without leaving your editor.
 - **Git & Secret Safety Audits**: Protects `.agents/plugins/agy-manager/` in `.gitignore` when writing project MCP manifests and enforces `0600` owner-only permissions on generated credential configs.
 - **Live External Change Adoption**: Runs a lightweight 15-second reconciliation check so tools added via `claude mcp add`, `agy mcp`, or newly created skill folders are adopted back into your Vault seamlessly.
 - **Automatic & Manual Config Backups**: Before `agymg` touches any external config file for the first time, it snapshots your existing `.claude.json` and `mcp_config.json` into `~/.gemini/manager-vault/backups/snapshot-<timestamp>/` (retaining up to 10 snapshots while always preserving your initial `pre-first-sync` backup, plus one-click manual backups in **Settings → Master Vault**).
@@ -254,7 +254,6 @@ Want Claude Code to surface missing Vault tools automatically when you open a re
 
 | Shortcut | Action |
 | :--- | :--- |
-| `⌃⌥A` | Open Control Center window globally from any app |
 | `⌘0` | Open Control Center window |
 | `⌘1` – `⌘5` | Jump to Master Vault, Global Core, Plugins, Built-ins, or Sync Logs |
 | `⌘S` | Synchronize all global and project configurations to disk |

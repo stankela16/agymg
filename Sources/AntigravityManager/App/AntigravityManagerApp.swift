@@ -32,9 +32,7 @@ struct AntigravityManagerApp: App {
     @State private var appState = AppState()
     @Environment(\.openWindow) private var openWindow
 
-    init() {
-        HotKeyManager.shared.register()
-    }
+    init() {}
 
     var body: some Scene {
         Window("agymg", id: "control-center") {

@@ -97,15 +97,6 @@ public struct MenuBarPopoverView: View {
             .help(state.autoFollowWorkspace
                 ? "Auto-Follow enabled: automatically tracks the active project in Antigravity / Claude / IDE (click to lock)"
                 : "Auto-Follow locked to current selection (click to automatically follow active project)")
-
-            Text("⌃⌥A")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(DesignTokens.inkSecondary)
-                .padding(.horizontal, DesignTokens.Spacing.xxs)
-                .padding(.vertical, 2)
-                .background(DesignTokens.surfaceContainer)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.xs))
-                .help("Global shortcut for Control Center (⌃⌥A)")
         }
         .padding(.horizontal, DesignTokens.Spacing.xxs)
     }

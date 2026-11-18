@@ -1,7 +1,6 @@
 import XCTest
 import SwiftUI
 import AppKit
-import Carbon
 @testable import AntigravityManager
 
 @MainActor
@@ -37,14 +36,9 @@ final class M1ChallengerVerificationTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Mission 1: HotKeyManager & WindowRouter Verification
-    func testHotKeyManagerRegistrationAndWindowRouterIntegration() {
-        // 1. Verify HotKeyManager instance and idempotent registration
-        let manager = HotKeyManager.shared
-        manager.register()
-        manager.register() // Should not crash or re-install handlers
-
-        // 2. Verify WindowRouter triggerOpen invokes openControlCenter callback when window is absent
+    // MARK: - Mission 1: WindowRouter Verification
+    func testWindowRouterIntegration() {
+        // 1. Verify WindowRouter triggerOpen invokes openControlCenter callback when window is absent
         var openCalled = false
         WindowRouter.openControlCenter = {
             openCalled = true
@@ -53,7 +47,7 @@ final class M1ChallengerVerificationTests: XCTestCase {
         WindowRouter.triggerOpen()
         XCTAssertTrue(openCalled, "WindowRouter.triggerOpen must invoke openControlCenter when no window is present")
 
-        // 3. Verify dismissPopover does not crash and processes window hierarchy
+        // 2. Verify dismissPopover does not crash and processes window hierarchy
         WindowRouter.dismissPopover()
     }
 

@@ -476,12 +476,6 @@ final class AntigravityManagerTests: XCTestCase {
         state.cancelPendingTasks()
     }
 
-    func testHotKeyManagerRegistration() {
-        HotKeyManager.shared.register()
-        // Calling again is idempotent
-        HotKeyManager.shared.register()
-    }
-
     func testMenuBarPopoverAndServerRow() {
         let state = AppState()
         let server = MCPServerDefinition(id: "test-mcp", name: "Test MCP", category: "core", config: [:])

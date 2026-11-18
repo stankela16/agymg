@@ -94,7 +94,7 @@ public struct SettingsGeneralTab: View {
                             .font(.system(size: 12))
                             .foregroundStyle(DesignTokens.ink)
                         Spacer()
-                        Text("⌘0 / ⌃⌥A")
+                        Text("⌘0")
                             .font(.system(size: 11, design: .monospaced))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -102,7 +102,7 @@ public struct SettingsGeneralTab: View {
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
 
-                    Text("Press ⌃⌥A globally (or ⌘0 inside the app) to bring the Control Center window to the front.")
+                    Text("Press ⌘0 inside the app to bring the Control Center window to the front.")
                         .font(.system(size: 10.5))
                         .foregroundStyle(DesignTokens.inkTertiary)
                 }
