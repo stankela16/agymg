@@ -23,9 +23,8 @@ public struct ProjectScannerService: Sendable {
                 }
             }
         }
-        let parentName = URL(fileURLWithPath: stdPath).deletingLastPathComponent().lastPathComponent.lowercased()
-        let leafName = URL(fileURLWithPath: stdPath).lastPathComponent.lowercased()
-        return ignoredContainers.contains(parentName) || ignoredContainers.contains(leafName)
+        let allComponents = stdPath.split(separator: "/").map { String($0).lowercased() }
+        return allComponents.contains(where: { ignoredContainers.contains($0) })
     }
 
     public func discoverProjects(in customDirectory: URL? = nil, scanDefaultWhenNil: Bool = true) -> [ProjectProfile] {
@@ -59,7 +58,10 @@ public struct ProjectScannerService: Sendable {
         if let files = try? fm.contentsOfDirectory(at: configProjectsDir, includingPropertiesForKeys: nil) {
             for fileURL in files where fileURL.pathExtension == "json" {
                 if let (name, path) = parseProjectConfig(fileURL: fileURL) {
-                    if canProbePathWithoutTCCPrompt(path, authorizedPrefix: authorizedPrefix),
+                    let leafName = URL(fileURLWithPath: path).lastPathComponent
+                    if !Self.isIgnoredFolderName(leafName),
+                       !Self.isInsideIgnoredContainer(path, rootPrefix: authorizedPrefix),
+                       canProbePathWithoutTCCPrompt(path, authorizedPrefix: authorizedPrefix),
                        fm.fileExists(atPath: path) {
                         registerCandidate(name: name, path: path)
                     }

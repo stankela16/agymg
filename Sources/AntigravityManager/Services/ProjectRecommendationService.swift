@@ -661,7 +661,8 @@ public struct ProjectRecommendationService: Sendable {
             let metaSkillIds: Set<String> = [
                 "ask", "vault", "handoff", "grill-plan", "boost-mode",
                 "skill-creator", "consult-claude", "consult-antigravity",
-                "logo-design", "automation", "plugin", "run-workflow"
+                "logo-design", "automation", "plugin", "run-workflow",
+                "find-skills"
             ]
             var dynamicCount = 0
             let sortedVaultSkills = availableSkills.sorted { $0.id < $1.id }

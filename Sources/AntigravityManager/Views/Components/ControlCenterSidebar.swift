@@ -104,7 +104,7 @@ public struct ControlCenterSidebar: View {
             }
             .listStyle(.sidebar)
 
-            VaultEngineFooterView()
+            VaultEngineFooterView(state: state)
         }
         .background(DesignTokens.panel)
         .navigationSplitViewColumnWidth(

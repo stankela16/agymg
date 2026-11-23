@@ -1442,7 +1442,7 @@ public enum CLIRunner {
         Active Project MCPs: [\(pMCP)] | Global MCPs: [\(gMCP)] | Project Skills: [\(pSkills)] | Project Plugins: [\(pPlugins)]
         Recommended for repo: [\(recs)]
         Inactive Vault Catalog -> MCPs: [\(inMCP)] | Skills: [\(inSkills)] | Plugins: [\(inPlugins)]
-        Proactive Rule: If the user triggers /vault, asks about active/available MCPs/skills/plugins, or works on a task covered by an inactive Vault resource, proactively suggest it or run `agymg brief --project "\(brief.project.path)" --json` and `agymg set --project "\(brief.project.path)" --enable-mcp <id> --enable-skill <id> --enable-plugin <id>`.
+        Proactive Rule: If the user triggers /vault, asks about active/available MCPs/skills/plugins, or works on a task covered by an inactive Vault resource, proactively suggest it or run `agymg brief --project "\(brief.project.path)" --json` and `agymg set --project "\(brief.project.path)" --enable-mcp <id> --enable-skill <id> --enable-plugin <id>`. If the user requests a specialized domain or task not covered by active or Vault skills, proactively search for top community skills via `find-skills` (`npx skills find <query>`) and offer to install the best match with `agymg import-skill <github-url>`.
         """
     }
 

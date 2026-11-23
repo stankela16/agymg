@@ -25,6 +25,32 @@ public struct MCPServerDefinition: Codable, Identifiable, Sendable, Hashable {
         serverUrl != nil
     }
 
+    public var transportLabel: String {
+        isRemote ? "Remote HTTP" : "Local stdio"
+    }
+
+    public var displayEndpoint: String {
+        if let url = serverUrl {
+            return url
+        }
+        return Self.abbreviatingHome(summary)
+    }
+
+    public static func abbreviatingHome(_ text: String) -> String {
+        let candidates = [
+            PathConstants.homeDirectory.path,
+            PathConstants.effectiveHomeDirectory.path,
+            NSHomeDirectory()
+        ]
+        var result = text
+        for prefix in candidates where !prefix.isEmpty && prefix != "/" {
+            if result.contains(prefix) {
+                result = result.replacingOccurrences(of: prefix, with: "~")
+            }
+        }
+        return result
+    }
+
     public var summary: String {
         if let url = serverUrl {
             return url

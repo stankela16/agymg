@@ -1,22 +1,29 @@
 import SwiftUI
+import AppKit
 
 public struct MenuBarSkillRow: View {
     @Bindable var state: AppState
     let skill: SkillDefinition
     let projectId: String?
     let isLocalProjectSkill: Bool
+    let isExpanded: Bool
+    let onToggleExpand: (() -> Void)?
     @State private var isHovered: Bool = false
 
     public init(
         state: AppState,
         skill: SkillDefinition,
         projectId: String? = nil,
-        isLocalProjectSkill: Bool = false
+        isLocalProjectSkill: Bool = false,
+        isExpanded: Bool = false,
+        onToggleExpand: (() -> Void)? = nil
     ) {
         self.state = state
         self.skill = skill
         self.projectId = projectId
         self.isLocalProjectSkill = isLocalProjectSkill
+        self.isExpanded = isExpanded
+        self.onToggleExpand = onToggleExpand
     }
 
     private var project: ProjectProfile? {
@@ -46,6 +53,48 @@ public struct MenuBarSkillRow: View {
     }
 
     public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                rowHeaderButton
+                toggleControl
+            }
+
+            if isExpanded {
+                expandedDetailView
+            }
+        }
+        .padding(.horizontal, DesignTokens.Spacing.xs)
+        .padding(.vertical, DesignTokens.Spacing.xxs)
+        .background(isExpanded ? DesignTokens.surfaceContainerLow : (isHovered ? DesignTokens.surfaceContainerHigh : Color.clear))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isExpanded ? DesignTokens.cardBorder : Color.clear, lineWidth: 0.75)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .task(id: isExpanded) {
+            if isExpanded {
+                state.loadSkillPreviewIfNeeded(for: skill)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var rowHeaderButton: some View {
+        if let onToggleExpand {
+            Button(action: onToggleExpand) {
+                headerRowLabel
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(skill.name) details" : "Inspect \(skill.name) instructions before toggling")
+            .accessibilityLabel("\(skill.name), \(isExpanded ? "collapse details" : "show details")")
+        } else {
+            headerRowLabel
+        }
+    }
+
+    private var headerRowLabel: some View {
         HStack(spacing: DesignTokens.Spacing.xs) {
             Circle()
                 .fill(isEnabled ? DesignTokens.Colors.statusSuccess : DesignTokens.inkTertiary.opacity(0.4))
@@ -86,24 +135,99 @@ public struct MenuBarSkillRow: View {
                             .clipShape(Capsule())
                             .help("Locally enabled for this project")
                     }
+
+                    if onToggleExpand != nil && (isHovered || isExpanded) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(DesignTokens.inkTertiary)
+                    }
                 }
 
-                Text(skillSubtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(DesignTokens.inkTertiary)
-                    .lineLimit(1)
+                if !isExpanded {
+                    Text(skillSubtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                        .lineLimit(1)
+                }
             }
 
-            Spacer()
-
-            toggleControl
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, DesignTokens.Spacing.xs)
-        .padding(.vertical, DesignTokens.Spacing.xxs)
-        .background(isHovered ? DesignTokens.surfaceContainerHigh : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
+    }
+
+    private var expandedDetailView: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+            HStack(spacing: DesignTokens.Spacing.xxs) {
+                Text(skill.category)
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(DesignTokens.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(DesignTokens.storeBlueTint)
+                    .clipShape(Capsule())
+
+                Text(skill.id)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(DesignTokens.inkTertiary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+
+            if !skill.description.isEmpty {
+                Text(skill.description)
+                    .font(.system(size: 10))
+                    .foregroundStyle(DesignTokens.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let preview = state.skillPreviews[skill.id], !preview.isEmpty, preview != skill.description {
+                Text(preview)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(DesignTokens.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(DesignTokens.Spacing.xxs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DesignTokens.surfaceContainerLowest)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else if state.skillPreviews[skill.id] == nil {
+                HStack(spacing: DesignTokens.Spacing.xxs) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Loading SKILL.md preview…")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                }
+            }
+
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                Button {
+                    state.openSkillInControlCenter(skill)
+                } label: {
+                    Label("Edit SKILL.md", systemImage: "doc.text")
+                        .font(.system(size: 9.5, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Open full SKILL.md in Control Center editor")
+
+                Button {
+                    NSWorkspace.shared.selectFile(skill.path, inFileViewerRootedAtPath: "")
+                } label: {
+                    Label("Finder", systemImage: "folder")
+                        .font(.system(size: 9.5, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Reveal skill directory in Finder")
+
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 2)
+        }
+        .padding(.leading, 14)
+        .padding(.bottom, DesignTokens.Spacing.xxs)
     }
 
     private var skillSubtitle: String {
@@ -159,12 +283,22 @@ public struct MenuBarPluginRow: View {
     @Bindable var state: AppState
     let plugin: PluginDefinition
     let projectId: String?
+    let isExpanded: Bool
+    let onToggleExpand: (() -> Void)?
     @State private var isHovered: Bool = false
 
-    public init(state: AppState, plugin: PluginDefinition, projectId: String? = nil) {
+    public init(
+        state: AppState,
+        plugin: PluginDefinition,
+        projectId: String? = nil,
+        isExpanded: Bool = false,
+        onToggleExpand: (() -> Void)? = nil
+    ) {
         self.state = state
         self.plugin = plugin
         self.projectId = projectId
+        self.isExpanded = isExpanded
+        self.onToggleExpand = onToggleExpand
     }
 
     private var project: ProjectProfile? {
@@ -193,6 +327,81 @@ public struct MenuBarPluginRow: View {
     }
 
     public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                rowHeaderButton
+                toggleControl
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+                    HStack(spacing: DesignTokens.Spacing.xxs) {
+                        if plugin.hasMCP {
+                            Text("Includes MCP")
+                                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(DesignTokens.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1.5)
+                                .background(DesignTokens.storeBlueTint)
+                                .clipShape(Capsule())
+                        }
+                        if plugin.hasSkills {
+                            Text("Bundled Skills")
+                                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(DesignTokens.tierOrange)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1.5)
+                                .background(DesignTokens.tierOrange.opacity(0.14))
+                                .clipShape(Capsule())
+                        }
+                        Spacer(minLength: 0)
+                    }
+
+                    Text(plugin.description.isEmpty ? "Managed plugin bundle in Master Vault." : plugin.description)
+                        .font(.system(size: 10))
+                        .foregroundStyle(DesignTokens.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button {
+                        NSWorkspace.shared.selectFile(plugin.path, inFileViewerRootedAtPath: "")
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                            .font(.system(size: 9.5, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .help("Reveal plugin folder in Finder")
+                }
+                .padding(.leading, 14)
+                .padding(.bottom, DesignTokens.Spacing.xxs)
+            }
+        }
+        .padding(.horizontal, DesignTokens.Spacing.xs)
+        .padding(.vertical, DesignTokens.Spacing.xxs)
+        .background(isExpanded ? DesignTokens.surfaceContainerLow : (isHovered ? DesignTokens.surfaceContainerHigh : Color.clear))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isExpanded ? DesignTokens.cardBorder : Color.clear, lineWidth: 0.75)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+    }
+
+    @ViewBuilder
+    private var rowHeaderButton: some View {
+        if let onToggleExpand {
+            Button(action: onToggleExpand) {
+                headerLabel
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(plugin.name) details" : "Inspect \(plugin.name) package contents")
+        } else {
+            headerLabel
+        }
+    }
+
+    private var headerLabel: some View {
         HStack(spacing: DesignTokens.Spacing.xs) {
             Circle()
                 .fill(isEnabled ? DesignTokens.Colors.statusSuccess : DesignTokens.inkTertiary.opacity(0.4))
@@ -224,24 +433,25 @@ public struct MenuBarPluginRow: View {
                             .clipShape(Capsule())
                             .help("Enabled for this project")
                     }
+
+                    if onToggleExpand != nil && (isHovered || isExpanded) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(DesignTokens.inkTertiary)
+                    }
                 }
 
-                Text(plugin.description)
-                    .font(.system(size: 10))
-                    .foregroundStyle(DesignTokens.inkTertiary)
-                    .lineLimit(1)
+                if !isExpanded {
+                    Text(plugin.description)
+                        .font(.system(size: 10))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                        .lineLimit(1)
+                }
             }
 
-            Spacer()
-
-            toggleControl
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, DesignTokens.Spacing.xs)
-        .padding(.vertical, DesignTokens.Spacing.xxs)
-        .background(isHovered ? DesignTokens.surfaceContainerHigh : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
     }
 
     @ViewBuilder

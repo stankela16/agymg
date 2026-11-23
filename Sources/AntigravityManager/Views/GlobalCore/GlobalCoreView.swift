@@ -21,27 +21,20 @@ public struct GlobalCoreView: View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 topActionBar
                 globalStatsBar
-                globalGuidanceBanner
 
-                HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                    // Left Column (Main Content)
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                        tabSelector
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    tabSelector
 
-                        switch selectedTab {
-                        case 0:
-                            GlobalCoreMCPTab(state: state, deletionTarget: $deletionTarget)
-                        case 1:
-                            GlobalCoreSkillsTab(state: state, deletionTarget: $deletionTarget, editingSkill: $editingSkill)
-                        default:
-                            GlobalCorePluginsTab(state: state, deletionTarget: $deletionTarget)
-                        }
+                    switch selectedTab {
+                    case 0:
+                        GlobalCoreMCPTab(state: state, deletionTarget: $deletionTarget)
+                    case 1:
+                        GlobalCoreSkillsTab(state: state, deletionTarget: $deletionTarget, editingSkill: $editingSkill)
+                    default:
+                        GlobalCorePluginsTab(state: state, deletionTarget: $deletionTarget)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // Right Column (Inspector)
-                    GlobalCoreInspectorView(state: state)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(DesignTokens.Spacing.lg)
         }
@@ -69,7 +62,7 @@ public struct GlobalCoreView: View {
                     Image(systemName: "globe.americas.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(DesignTokens.tierOrange)
-                    Text("Automatically active in all workspaces:")
+                    Text("Active across all Antigravity & Claude Code sessions:")
                         .font(.system(size: 11))
                         .foregroundStyle(DesignTokens.inkSecondary)
                     Text("~/.gemini/config/")
@@ -83,20 +76,6 @@ public struct GlobalCoreView: View {
             }
 
             Spacer()
-
-            Button {
-                state.syncAll()
-            } label: {
-                HStack(spacing: DesignTokens.Spacing.xxs) {
-                    Image(systemName: "bolt.fill")
-                    Text("Sync All")
-                }
-                .font(.system(size: 11, weight: .bold))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(DesignTokens.primaryContainer)
-            .disabled(state.isSyncing)
-            .help("Synchronize all global and project resources (⌘S)")
         }
     }
 
@@ -124,49 +103,6 @@ public struct GlobalCoreView: View {
         }
         .padding(.horizontal, DesignTokens.Spacing.sm)
         .padding(.vertical, DesignTokens.Spacing.xs)
-        .background(DesignTokens.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm)
-                .strokeBorder(DesignTokens.cardBorder, lineWidth: 1)
-        )
-    }
-
-    private var globalGuidanceBanner: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Spacing.sm) {
-            ZStack {
-                Circle()
-                    .fill(DesignTokens.tierOrange.opacity(0.12))
-                    .frame(width: 32, height: 32)
-                Image(systemName: "globe.americas.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(DesignTokens.tierOrange)
-            }
-
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text("Global Core Configuration")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(DesignTokens.ink)
-
-                    Text("ALWAYS ACTIVE")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(DesignTokens.tierOrange)
-                        .padding(.horizontal, DesignTokens.Spacing.xs)
-                        .padding(.vertical, DesignTokens.Spacing.xxs)
-                        .background(DesignTokens.tierOrange.opacity(0.15))
-                        .clipShape(Capsule())
-                }
-
-                Text("Toggle Master Vault tools globally across your Mac (~/.gemini/config/). Enabled resources are loaded in all Antigravity and Claude Code sessions.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DesignTokens.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.surfaceContainerLowest)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
         .overlay(

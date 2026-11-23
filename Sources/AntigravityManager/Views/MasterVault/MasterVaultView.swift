@@ -25,25 +25,19 @@ public struct MasterVaultView: View {
                 resourceStatsBar
                 VaultGuidanceBannerView(state: state)
 
-                HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                    // Left Column (65-70%)
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                        tabSelector
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    tabSelector
 
-                        switch vaultTab {
-                        case 0:
-                            VaultServersTab(state: state, deletionTarget: $deletionTarget)
-                        case 1:
-                            VaultSkillsTab(state: state, deletionTarget: $deletionTarget, editingSkill: $editingSkill)
-                        default:
-                            VaultPluginsTab(state: state, deletionTarget: $deletionTarget)
-                        }
+                    switch vaultTab {
+                    case 0:
+                        VaultServersTab(state: state, deletionTarget: $deletionTarget)
+                    case 1:
+                        VaultSkillsTab(state: state, deletionTarget: $deletionTarget, editingSkill: $editingSkill)
+                    default:
+                        VaultPluginsTab(state: state, deletionTarget: $deletionTarget)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // Right Column: Inspector Cards
-                    MasterVaultInspectorView(state: state)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(DesignTokens.Spacing.lg)
         }
@@ -117,22 +111,10 @@ public struct MasterVaultView: View {
                         }
                         .font(.system(size: 11, weight: .semibold))
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    .tint(DesignTokens.primaryContainer)
                     .help("Create a new skill in Master Vault")
                 }
-
-                Button {
-                    state.syncAll()
-                } label: {
-                    HStack(spacing: DesignTokens.Spacing.xxs) {
-                        Image(systemName: "bolt.fill")
-                        Text("Sync All Projects")
-                    }
-                    .font(.system(size: 11, weight: .bold))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(DesignTokens.primaryContainer)
-                .help("Synchronize all global and project resources (⌘S)")
             }
         }
     }

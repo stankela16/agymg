@@ -109,56 +109,31 @@ public struct ControlCenterFooter: View {
             }
 
             // Action Buttons
-            HStack(spacing: 8) {
-                Button {
-                    state.navigationSelection = .syncLogs
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 11))
-                        Text("View Logs")
-                            .font(.system(size: 12, weight: .medium))
-                        if !state.syncHistory.isEmpty {
-                            Text("\(state.syncHistory.count)")
-                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(DesignTokens.surfaceContainerHigh)
-                                .clipShape(Capsule())
-                        }
+            Button {
+                state.navigationSelection = .syncLogs
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                    Text("View Logs")
+                        .font(.system(size: 12, weight: .medium))
+                    if !state.syncHistory.isEmpty {
+                        Text("\(state.syncHistory.count)")
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(DesignTokens.surfaceContainerHigh)
+                            .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(DesignTokens.surfaceContainerLow)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().strokeBorder(DesignTokens.divider, lineWidth: 1))
                 }
-                .buttonStyle(.plain)
-                .help("View synchronization history (⌘5)")
-
-                Button {
-                    state.syncAll()
-                } label: {
-                    HStack(spacing: 4) {
-                        if state.isSyncing {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 11))
-                        }
-                        Text(state.isSyncing ? "Syncing..." : "Sync All")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(Color.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(DesignTokens.primaryContainer)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(state.isSyncing)
-                .help("Synchronize all global and project resources (⌘S)")
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(DesignTokens.surfaceContainerLow)
+                .clipShape(Capsule())
+                .overlay(Capsule().strokeBorder(DesignTokens.divider, lineWidth: 1))
             }
+            .buttonStyle(.plain)
+            .help("View synchronization history (⌘5)")
             .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, DesignTokens.Spacing.xl)

@@ -14,7 +14,7 @@ public struct GlobalCoreInspectorView: View {
             inheritedProjectsCard
             syncStatusCard
         }
-        .frame(width: 280)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var globalScopeCard: some View {

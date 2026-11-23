@@ -7,6 +7,18 @@ public enum CopySetupMode: String, Sendable {
     case replace
 }
 
+public struct PopoverFeedback: Equatable, Sendable {
+    public let message: String
+    public let detail: String
+    public let requiresChatReload: Bool
+
+    public init(message: String, detail: String, requiresChatReload: Bool = false) {
+        self.message = message
+        self.detail = detail
+        self.requiresChatReload = requiresChatReload
+    }
+}
+
 @MainActor
 @Observable
 public final class AppState {
@@ -53,6 +65,10 @@ public final class AppState {
     public var selectedProjectId: String?
     public var isSyncing: Bool = false
     public var statusMessage: String?
+    public var popoverFeedback: PopoverFeedback? = nil
+    public var skillPreviews: [String: String] = [:]
+    public var requestedSkillToEdit: SkillDefinition? = nil
+    public var requestedProjectTab: Int? = nil
     public var lastSyncDate: Date? = nil
     public var syncHistory: [SyncLogEntry] = []
     public var isProjectsFolderAuthorized: Bool = ProjectFolderAccessManager.shared.isAuthorized
@@ -75,6 +91,8 @@ public final class AppState {
     @ObservationIgnored var syncDebounceTask: Task<Void, Never>?
     @ObservationIgnored var projectSyncDebounceTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var syncAllTask: Task<Void, Never>?
+    @ObservationIgnored var popoverFeedbackTask: Task<Void, Never>?
+    @ObservationIgnored private var loadingSkillPreviewIds: Set<String> = []
     @ObservationIgnored var lastLocalChangeDate = Date.distantPast
 
     public init(autoload: Bool = true) {
@@ -157,6 +175,121 @@ public final class AppState {
         projectSyncDebounceTasks.removeAll()
         syncAllTask?.cancel()
         syncAllTask = nil
+        popoverFeedbackTask?.cancel()
+        popoverFeedbackTask = nil
+    }
+
+    public func dismissPopoverFeedback() {
+        popoverFeedbackTask?.cancel()
+        popoverFeedbackTask = nil
+        popoverFeedback = nil
+    }
+
+    public func showPopoverFeedback(
+        message: String,
+        detail: String,
+        requiresChatReload: Bool = false
+    ) {
+        popoverFeedbackTask?.cancel()
+        popoverFeedback = PopoverFeedback(
+            message: message,
+            detail: detail,
+            requiresChatReload: requiresChatReload
+        )
+        guard !PathConstants.isRunningUnderTests else { return }
+        popoverFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.popoverFeedback = nil
+        }
+    }
+
+    public func openSkillInControlCenter(_ skill: SkillDefinition) {
+        requestedSkillToEdit = skill
+        WindowRouter.triggerOpen()
+    }
+
+    public func loadSkillPreviewIfNeeded(for skill: SkillDefinition) {
+        guard skillPreviews[skill.id] == nil,
+              !loadingSkillPreviewIds.contains(skill.id) else {
+            return
+        }
+        loadingSkillPreviewIds.insert(skill.id)
+        let skillId = skill.id
+        let rawPath = skill.path
+        let fallbackDescription = skill.description
+
+        Task.detached(priority: .userInitiated) {
+            let candidateURL = URL(fileURLWithPath: rawPath)
+            let mdURL: URL = candidateURL.pathExtension.lowercased() == "md"
+                ? candidateURL
+                : candidateURL.appendingPathComponent("SKILL.md")
+
+            let extracted: String
+            if let raw = try? String(contentsOf: mdURL, encoding: .utf8) {
+                let parsed = AppState.extractSkillPreview(from: raw)
+                extracted = parsed.isEmpty ? fallbackDescription : parsed
+            } else {
+                extracted = fallbackDescription
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.loadingSkillPreviewIds.remove(skillId)
+                self.skillPreviews[skillId] = extracted.isEmpty ? "No SKILL.md preview available." : extracted
+            }
+        }
+    }
+
+    public nonisolated static func extractSkillPreview(from markdown: String, maxCharacters: Int = 420) -> String {
+        let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
+        var lines = normalized.components(separatedBy: "\n")
+
+        if let firstNonEmpty = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
+           lines[firstNonEmpty].trimmingCharacters(in: .whitespaces) == "---" {
+            if let closingRelIndex = lines[(firstNonEmpty + 1)...].firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces) == "---"
+            }) {
+                lines = Array(lines[(closingRelIndex + 1)...])
+            }
+        }
+
+        var collected: [String] = []
+        var skippedTopH1 = false
+        for rawLine in lines {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("```") {
+                continue
+            }
+            if !skippedTopH1, trimmed.hasPrefix("# ") {
+                skippedTopH1 = true
+                continue
+            }
+            let cleaned: String
+            if trimmed.hasPrefix("#") {
+                let heading = trimmed.drop { $0 == "#" || $0 == " " }
+                cleaned = heading.isEmpty ? "" : "\(heading):"
+            } else {
+                cleaned = trimmed
+            }
+            guard !cleaned.isEmpty else { continue }
+            collected.append(cleaned)
+            if collected.count >= 6 {
+                break
+            }
+        }
+
+        let joined = collected.joined(separator: "\n")
+        guard joined.count > maxCharacters else {
+            return joined
+        }
+        let endIndex = joined.index(joined.startIndex, offsetBy: maxCharacters)
+        let prefix = String(joined[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let lastSpace = prefix.lastIndex(where: { $0 == " " || $0 == "\n" }),
+           prefix.distance(from: prefix.startIndex, to: lastSpace) > maxCharacters / 2 {
+            return String(prefix[..<lastSpace]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        }
+        return prefix + "…"
     }
 
     public func flushPendingSync() async {
@@ -521,6 +654,24 @@ public final class AppState {
         }
         projectRecommendations[projectId]?.removeAll { enabledKeys.contains($0.uniqueKey) }
         triggerProjectSync(project: projects[index], debounceNanoseconds: 150_000_000)
+
+        let pluginIdsWithMCP = Set(plugins.filter(\.hasMCP).map(\.id))
+        let touchesMCP = recs.contains { rec in
+            rec.kind == .mcp || (rec.kind == .plugin && pluginIdsWithMCP.contains(rec.id))
+        }
+        if recs.count == 1, let first = recs.first {
+            showPopoverFeedback(
+                message: "Synced · \(first.name) enabled",
+                detail: touchesMCP ? "Start a new chat to load MCP tools" : "Active immediately — no chat restart needed",
+                requiresChatReload: touchesMCP
+            )
+        } else {
+            showPopoverFeedback(
+                message: "Synced · \(recs.count) tools enabled",
+                detail: touchesMCP ? "Skills active now · new chat for MCPs" : "All enabled skills active immediately",
+                requiresChatReload: touchesMCP
+            )
+        }
     }
 
     public func enableAllRecommendations(for projectId: String) {

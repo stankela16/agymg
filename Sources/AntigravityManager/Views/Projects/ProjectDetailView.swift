@@ -59,36 +59,38 @@ public struct ProjectDetailView: View {
                 ProjectIsolationBannerView(projectName: project.name)
                 ProjectRecommendationsCard(state: state, projectId: project.id)
 
-                HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                    // Left Column
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                        tabSelector
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    tabSelector
 
-                        switch selectedTab {
-                        case 0:
-                            ProjectServersTab(state: state, projectId: project.id, deletionTarget: $deletionTarget)
-                        case 1:
-                            ProjectSkillsTab(state: state, projectId: project.id, deletionTarget: $deletionTarget, editingSkill: $editingSkill)
-                        default:
-                            ProjectPluginsTab(state: state, projectId: project.id, deletionTarget: $deletionTarget)
-                        }
-
-                        RuntimeManifestPreviewView(project: project, state: state)
-                            .padding(.top, DesignTokens.Spacing.xxs)
+                    switch selectedTab {
+                    case 0:
+                        ProjectServersTab(state: state, projectId: project.id, deletionTarget: $deletionTarget)
+                    case 1:
+                        ProjectSkillsTab(state: state, projectId: project.id, deletionTarget: $deletionTarget, editingSkill: $editingSkill)
+                    default:
+                        ProjectPluginsTab(state: state, projectId: project.id, deletionTarget: $deletionTarget)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    // Right Column
-                    ProjectIsolationSidebarView(
-                        project: project,
-                        state: state,
-                        onLinkSkillTap: { selectedTab = 1 }
-                    )
+                    RuntimeManifestPreviewView(project: project, state: state)
+                        .padding(.top, DesignTokens.Spacing.xxs)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(DesignTokens.Spacing.lg)
         }
         .background(DesignTokens.background)
+        .onAppear {
+            if let tab = state.requestedProjectTab {
+                selectedTab = tab
+                state.requestedProjectTab = nil
+            }
+        }
+        .onChange(of: state.requestedProjectTab) { _, newTab in
+            if let tab = newTab {
+                selectedTab = tab
+                state.requestedProjectTab = nil
+            }
+        }
     }
 
     private var topBreadcrumb: some View {

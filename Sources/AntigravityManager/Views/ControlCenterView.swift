@@ -1,10 +1,12 @@
 import SwiftUI
+import AppKit
 
 public struct ControlCenterView: View {
     @Bindable var state: AppState
     @State private var deletionTarget: DeletionTarget? = nil
     @State private var editingSkill: SkillDefinition? = nil
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isInspectorPresented: Bool = false
 
     public init(state: AppState) {
         self.state = state
@@ -26,6 +28,10 @@ public struct ControlCenterView: View {
                     .background(DesignTokens.background)
                     .navigationTitle(navigationTitle)
                     .toolbar { syncToolbarItem }
+                    .inspector(isPresented: $isInspectorPresented) {
+                        inspectorContent
+                            .inspectorColumnWidth(min: 250, ideal: 280, max: 320)
+                    }
                 }
                 .navigationSplitViewStyle(.balanced)
             }
@@ -39,6 +45,19 @@ public struct ControlCenterView: View {
         }
         .alert(item: $deletionTarget) { target in
             deletionAlert(for: target)
+        }
+        .onAppear {
+            consumeRequestedSkillToEdit()
+        }
+        .onChange(of: state.requestedSkillToEdit) { _, _ in
+            consumeRequestedSkillToEdit()
+        }
+    }
+
+    private func consumeRequestedSkillToEdit() {
+        if let requested = state.requestedSkillToEdit {
+            editingSkill = requested
+            state.requestedSkillToEdit = nil
         }
     }
 
@@ -70,6 +89,48 @@ public struct ControlCenterView: View {
         case .settings:
             SettingsView(state: state)
         }
+    }
+
+    @ViewBuilder
+    private var inspectorContent: some View {
+        ScrollView {
+            Group {
+                switch state.navigationSelection {
+                case .globalCore:
+                    GlobalCoreInspectorView(state: state)
+                case .project(let projectId):
+                    if let project = state.projects.first(where: { $0.id == projectId }) {
+                        ProjectIsolationSidebarView(
+                            project: project,
+                            state: state,
+                            onLinkSkillTap: { state.requestedProjectTab = 1 }
+                        )
+                    } else {
+                        MasterVaultInspectorView(state: state)
+                    }
+                default:
+                    MasterVaultInspectorView(state: state)
+                }
+            }
+            .padding(DesignTokens.Spacing.md)
+        }
+        .background(DesignTokens.panel)
+    }
+
+    private var diagnosticsStatus: (hasAttention: Bool, hasErrors: Bool) {
+        let activeServerIds = state.globalServerIds.union(state.projects.flatMap(\.enabledMCPServerIds))
+        let activeHealth = state.mcpHealthByServerId.filter { activeServerIds.contains($0.key) }.values
+        let auditFailed = state.projectSafetyAudits.values.contains { $0.overallStatus == .failed }
+        let hasErrors = auditFailed
+            || activeHealth.contains { $0.state == .error }
+            || state.driftIssues.contains { $0.severity == .error }
+        let auditWarn = state.projects.contains { proj in
+            !proj.enabledMCPServerIds.isEmpty && state.projectSafetyAudits[proj.id]?.overallStatus == .warning
+        }
+        let hasWarnings = auditWarn
+            || activeHealth.contains { $0.state == .warning }
+            || state.driftIssues.contains { $0.severity == .warning }
+        return (hasErrors || hasWarnings, hasErrors)
     }
 
     private var navigationTitle: String {
@@ -119,16 +180,35 @@ public struct ControlCenterView: View {
             Button {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: PathConstants.vaultDirectory.path)
             } label: {
-                Image(systemName: "folder")
+                Label("Vault Folder", systemImage: "folder")
             }
             .help("Reveal Master Vault folder in Finder (⇧⌘R)")
 
             Button {
                 Task { await state.refreshProjects() }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
             .help("Refresh workspaces from disk (⌘R)")
+
+            let diag = diagnosticsStatus
+            Button {
+                withAnimation(DesignTokens.snappySpring) {
+                    isInspectorPresented.toggle()
+                }
+            } label: {
+                Label("Inspector", systemImage: "sidebar.right")
+                    .overlay(alignment: .topTrailing) {
+                        if diag.hasAttention && !isInspectorPresented {
+                            Circle()
+                                .fill(diag.hasErrors ? DesignTokens.Colors.statusError : DesignTokens.tierOrange)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 2, y: -2)
+                        }
+                    }
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .help(isInspectorPresented ? "Hide Inspector panel (⌥⌘I)" : "Show Inspector panel (⌥⌘I)")
 
             Button {
                 state.syncAll()

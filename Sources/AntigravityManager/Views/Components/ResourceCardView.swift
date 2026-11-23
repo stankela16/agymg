@@ -34,11 +34,21 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
         self.actions = actions()
     }
 
+    private var shouldShowSummary: Bool {
+        guard let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        guard let subtitle, !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return true
+        }
+        return summary != subtitle
+    }
+
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             topRow
 
-            if let summary, !summary.isEmpty {
+            if shouldShowSummary, let summary {
                 Text(summary)
                     .font(.system(size: 12))
                     .foregroundStyle(DesignTokens.inkSecondary)
@@ -50,14 +60,14 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
                 commandExecutionBox(cmd: subtitle)
             }
         }
-        .padding(16)
+        .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.surfaceContainerLowest)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.default))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.default)
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md)
                 .strokeBorder(
                     isHovered ? DesignTokens.Colors.cardHoverBorder : DesignTokens.cardBorder,
-                    lineWidth: isHovered ? 1.5 : 1.0
+                    lineWidth: isHovered ? 1.25 : 1.0
                 )
         )
         .shadow(color: Color.black.opacity(isHovered ? 0.08 : 0.03), radius: isHovered ? 6 : 2, y: isHovered ? 3 : 1)
@@ -69,12 +79,13 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
     }
 
     private var topRow: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: DesignTokens.Spacing.sm) {
             ZStack {
-                Circle().fill(DesignTokens.brandTint)
-                    .frame(width: 38, height: 38)
+                Circle()
+                    .fill(DesignTokens.brandTint)
+                    .frame(width: 32, height: 32)
                 Image(systemName: iconName)
-                    .font(.system(size: 17))
+                    .font(.system(size: 15))
                     .foregroundStyle(DesignTokens.secondary)
             }
             .overlay(
@@ -82,32 +93,31 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
                     .strokeBorder(DesignTokens.secondary.opacity(0.22), lineWidth: 1)
             )
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(DesignTokens.ink)
                     .lineLimit(1)
 
-                HStack(spacing: 6) {
+                WrappingHStackLayout(horizontalSpacing: 6, verticalSpacing: 4) {
                     badges
                 }
             }
-
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             actions
         }
     }
 
     private func commandExecutionBox(cmd: String) -> some View {
-        HStack {
+        HStack(spacing: DesignTokens.Spacing.xs) {
             Text(cmd)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(DesignTokens.inkSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            Spacer()
+            Spacer(minLength: 0)
 
             Button {
                 NSPasteboard.general.clearContents()
@@ -119,12 +129,13 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
             } label: {
                 Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 11))
-                    .foregroundStyle(isCopied ? DesignTokens.secondary : DesignTokens.inkTertiary)
+                    .foregroundStyle(isCopied ? DesignTokens.Colors.statusSuccess : DesignTokens.inkTertiary)
             }
             .buttonStyle(.plain)
-            .help("Copy CLI command: \(cmd)")
+            .help("Copy: \(cmd)")
+            .accessibilityLabel("Copy \(cmd)")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, DesignTokens.Spacing.sm)
         .padding(.vertical, 6)
         .background(DesignTokens.surfaceContainerLow)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))

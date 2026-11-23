@@ -544,9 +544,12 @@ public actor VaultService {
             return discovered
         }
 
-        var mergedByPath: [String: ProjectProfile] = [:]
+        var mergedByCanonicalPath: [String: ProjectProfile] = [:]
         let projectMarkers = [".git", "Package.swift", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"]
         for saved in savedList {
+            if isArchivedOrExcludedProject(saved, rootPrefix: authorizedDir?.path) {
+                continue
+            }
             if FileManager.default.fileExists(atPath: saved.path) {
                 let leaf = URL(fileURLWithPath: saved.path).lastPathComponent
                 if ProjectScannerService.isIgnoredFolderName(leaf) {
@@ -556,23 +559,25 @@ public actor VaultService {
                         continue
                     }
                 }
-                mergedByPath[saved.path] = saved
+                let canonicalKey = URL(fileURLWithPath: saved.path).resolvingSymlinksInPath().path
+                mergedByCanonicalPath[canonicalKey] = saved
             }
         }
 
         for disc in discovered {
-            if let existing = mergedByPath[disc.path] {
+            let canonicalKey = URL(fileURLWithPath: disc.path).resolvingSymlinksInPath().path
+            if let existing = mergedByCanonicalPath[canonicalKey] {
                 var updated = existing
                 updated.enabledMCPServerIds.formUnion(disc.enabledMCPServerIds)
                 updated.enabledSkillIds.formUnion(disc.enabledSkillIds)
                 updated.enabledPluginIds.formUnion(disc.enabledPluginIds)
-                mergedByPath[disc.path] = updated
+                mergedByCanonicalPath[canonicalKey] = updated
             } else {
-                mergedByPath[disc.path] = disc
+                mergedByCanonicalPath[canonicalKey] = disc
             }
         }
 
-        let result = Array(mergedByPath.values).sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let result = Array(mergedByCanonicalPath.values).sorted { $0.name.lowercased() < $1.name.lowercased() }
         saveProjects(result)
         return result
     }
@@ -651,6 +656,9 @@ public actor VaultService {
 
         var mergedByCanonicalPath: [String: ProjectProfile] = [:]
         for saved in savedList {
+            if isArchivedOrExcludedProject(saved) {
+                continue
+            }
             if canSafelyStat(saved.path) {
                 guard fm.fileExists(atPath: saved.path) else { continue }
                 let key = URL(fileURLWithPath: saved.path).resolvingSymlinksInPath().path
@@ -694,6 +702,9 @@ public actor VaultService {
 
         var mergedByCanonicalPath: [String: ProjectProfile] = [:]
         for saved in savedList {
+            if isArchivedOrExcludedProject(saved, rootPrefix: scanRoot.path) {
+                continue
+            }
             if !PathConstants.isTCCProtectedPath(saved.path) || ProjectFolderAccessManager.shared.isAuthorized {
                 guard fm.fileExists(atPath: saved.path) else { continue }
                 let key = URL(fileURLWithPath: saved.path).resolvingSymlinksInPath().path
@@ -717,6 +728,14 @@ public actor VaultService {
         }
 
         return Array(mergedByCanonicalPath.values).sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    private func isArchivedOrExcludedProject(_ saved: ProjectProfile, rootPrefix: String? = nil) -> Bool {
+        if ProjectScannerService.isInsideIgnoredContainer(saved.path, rootPrefix: rootPrefix) {
+            return true
+        }
+        let lowerName = saved.name.lowercased()
+        return lowerName.contains("_archive") || lowerName.contains("_backups")
     }
 
     public func saveActiveContext(_ context: ActiveWorkspaceContext) {

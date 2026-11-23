@@ -4,61 +4,119 @@ extension AppState {
     // MARK: - Global Toggles
     // MARK: - Global Toggles
     public func toggleGlobalServer(id: String) {
+        let enabled: Bool
         if globalServerIds.contains(id) {
             globalServerIds.remove(id)
+            enabled = false
         } else {
             globalServerIds.insert(id)
+            enabled = true
         }
         triggerSync(debounceNanoseconds: 250_000_000)
+        let name = servers.first(where: { $0.id == id })?.name ?? id
+        showPopoverFeedback(
+            message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
+            detail: "Start a new chat to load MCP changes",
+            requiresChatReload: true
+        )
     }
 
     public func toggleGlobalSkill(id: String) {
+        let enabled: Bool
         if globalSkillIds.contains(id) {
             globalSkillIds.remove(id)
+            enabled = false
         } else {
             globalSkillIds.insert(id)
+            enabled = true
         }
         triggerSync(debounceNanoseconds: 250_000_000)
+        let name = skills.first(where: { $0.id == id })?.name ?? id
+        showPopoverFeedback(
+            message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
+            detail: "Active immediately — no chat restart needed",
+            requiresChatReload: false
+        )
     }
 
     public func toggleGlobalPlugin(id: String) {
+        let enabled: Bool
         if globalPluginIds.contains(id) {
             globalPluginIds.remove(id)
+            enabled = false
         } else {
             globalPluginIds.insert(id)
+            enabled = true
         }
         triggerSync(debounceNanoseconds: 250_000_000)
+        let plugin = plugins.first(where: { $0.id == id })
+        let name = plugin?.name ?? id
+        let hasMCP = plugin?.hasMCP ?? false
+        showPopoverFeedback(
+            message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
+            detail: hasMCP ? "Skills active now · new chat for MCPs" : "Active immediately — no chat restart needed",
+            requiresChatReload: hasMCP
+        )
     }
 
     // MARK: - Project Toggles
     public func toggleProjectServer(projectId: String, serverId: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let enabled: Bool
         if projects[index].enabledMCPServerIds.contains(serverId) {
             projects[index].enabledMCPServerIds.remove(serverId)
+            enabled = false
         } else {
             projects[index].enabledMCPServerIds.insert(serverId)
+            enabled = true
         }
         triggerProjectSync(project: projects[index], debounceNanoseconds: 250_000_000)
+        let name = servers.first(where: { $0.id == serverId })?.name ?? serverId
+        showPopoverFeedback(
+            message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
+            detail: "Start a new chat to load MCP changes",
+            requiresChatReload: true
+        )
     }
 
     public func toggleProjectSkill(projectId: String, skillId: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let enabled: Bool
         if projects[index].enabledSkillIds.contains(skillId) {
             projects[index].enabledSkillIds.remove(skillId)
+            enabled = false
         } else {
             projects[index].enabledSkillIds.insert(skillId)
+            enabled = true
         }
         triggerProjectSync(project: projects[index], debounceNanoseconds: 250_000_000)
+        let name = skills.first(where: { $0.id == skillId })?.name ?? skillId
+        showPopoverFeedback(
+            message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
+            detail: "Active immediately — no chat restart needed",
+            requiresChatReload: false
+        )
     }
 
     public func toggleProjectPlugin(projectId: String, pluginId: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let enabled: Bool
         if projects[index].enabledPluginIds.contains(pluginId) {
             projects[index].enabledPluginIds.remove(pluginId)
+            enabled = false
         } else {
             projects[index].enabledPluginIds.insert(pluginId)
+            enabled = true
         }
         triggerProjectSync(project: projects[index], debounceNanoseconds: 250_000_000)
+        let plugin = plugins.first(where: { $0.id == pluginId })
+        let name = plugin?.name ?? pluginId
+        let hasMCP = plugin?.hasMCP ?? false
+        showPopoverFeedback(
+            message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
+            detail: hasMCP ? "Skills active now · new chat for MCPs" : "Active immediately — no chat restart needed",
+            requiresChatReload: hasMCP
+        )
     }
 
     func triggerSync(debounceNanoseconds: UInt64 = 0) {
@@ -196,6 +254,11 @@ extension AppState {
 
     public func syncProject(_ project: ProjectProfile) {
         triggerProjectSync(project: project)
+        showPopoverFeedback(
+            message: "Synced · \(project.name)",
+            detail: "Configs & symlinks updated on disk",
+            requiresChatReload: false
+        )
     }
 
     public func syncAll() {
@@ -356,7 +419,11 @@ extension AppState {
         }
         // Preserve custom imported projects whose directories still exist
         for existing in existingProjects {
-            if !updated.contains(where: { $0.path == existing.path }) && FileManager.default.fileExists(atPath: existing.path) {
+            if !updated.contains(where: { $0.path == existing.path })
+                && !ProjectScannerService.isInsideIgnoredContainer(existing.path, rootPrefix: targetDir?.path)
+                && !existing.name.lowercased().contains("_archive")
+                && !existing.name.lowercased().contains("_backups")
+                && FileManager.default.fileExists(atPath: existing.path) {
                 updated.append(existing)
             }
         }

@@ -14,7 +14,7 @@ public struct MasterVaultInspectorView: View {
             menubarCompanionCard
             auditLogCard
         }
-        .frame(width: 280)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var projectsIsolationCard: some View {

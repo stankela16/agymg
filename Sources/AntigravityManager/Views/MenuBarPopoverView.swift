@@ -12,6 +12,7 @@ public struct MenuBarPopoverView: View {
     @State private var selectedTab: MenuBarResourceTab = .mcp
     @State private var searchText: String = ""
     @State private var showActiveOnly: Bool = false
+    @State private var expandedResourceKey: String? = nil
     @State private var isHoveredOpen: Bool = false
     @State private var isHoveredSettings: Bool = false
     @State private var isHoveredQuit: Bool = false
@@ -39,6 +40,11 @@ public struct MenuBarPopoverView: View {
 
             Divider().background(DesignTokens.hairline)
             resourcesTabSection
+
+            if let feedback = state.popoverFeedback {
+                autoSyncFeedbackBanner(feedback)
+            }
+
             Divider().background(DesignTokens.hairline)
             actionButtonsSection
         }
@@ -56,6 +62,12 @@ public struct MenuBarPopoverView: View {
             Task { @MainActor in
                 await state.workspaceMonitor.checkIDefocusWorkspace()
             }
+        }
+        .onChange(of: selectedTab) { _, _ in
+            expandedResourceKey = nil
+        }
+        .onChange(of: state.selectedProjectId) { _, _ in
+            expandedResourceKey = nil
         }
         .onExitCommand {
             WindowRouter.dismissPopover()
@@ -108,9 +120,10 @@ public struct MenuBarPopoverView: View {
     private var activeContextSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
             HStack(spacing: DesignTokens.Spacing.xxs) {
-                Text("ACTIVE CONTEXT")
+                Text("WORKSPACE")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(DesignTokens.inkSecondary)
+                    .lineLimit(1)
 
                 if state.selectedProject != nil, let badge = formattedWorkspaceSourceBadge {
                     Text(badge)
@@ -120,23 +133,30 @@ public struct MenuBarPopoverView: View {
                         .padding(.vertical, 1)
                         .background(DesignTokens.surfaceContainer)
                         .clipShape(Capsule())
+                        .lineLimit(1)
                         .help("Detected workspace source: \(state.activeWorkspaceSource ?? "auto")")
                 }
 
-                Spacer()
+                Spacer(minLength: DesignTokens.Spacing.xxs)
                 if let selected = state.selectedProject {
                     Text(projectSummaryText(for: selected))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(DesignTokens.secondary)
-                        .padding(.horizontal, DesignTokens.Spacing.xxs)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(DesignTokens.storeBlueTint)
                         .clipShape(Capsule())
                 } else {
                     Text("\(state.globalServerIds.count) MCP · \(state.globalSkillIds.count) Skills · \(state.globalPluginIds.count) Plugins")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(DesignTokens.tierOrange)
-                        .padding(.horizontal, DesignTokens.Spacing.xxs)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(DesignTokens.tierOrange.opacity(0.12))
                         .clipShape(Capsule())
@@ -278,9 +298,62 @@ public struct MenuBarPopoverView: View {
     }
 
     private func listScrollHeight(itemCount: Int) -> CGFloat {
-        let rowHeight: CGFloat = 30
+        let rowHeight: CGFloat = 32
         let calculated = CGFloat(max(itemCount, 1)) * rowHeight
+        if expandedResourceKey != nil {
+            return min(max(calculated + 128, 176), 272)
+        }
         return min(max(calculated, 88), 224)
+    }
+
+    private func toggleResourceExpansion(key: String) {
+        withAnimation(DesignTokens.snappySpring) {
+            expandedResourceKey = (expandedResourceKey == key) ? nil : key
+        }
+    }
+
+    private func autoSyncFeedbackBanner(_ feedback: PopoverFeedback) -> some View {
+        let accentColor = feedback.requiresChatReload ? DesignTokens.tierOrange : DesignTokens.Colors.statusSuccess
+        let bgColor = feedback.requiresChatReload ? DesignTokens.Colors.statusWarningBg : DesignTokens.Colors.statusSuccessBg
+        let iconName = feedback.requiresChatReload ? "arrow.triangle.2.circlepath.circle.fill" : "checkmark.circle.fill"
+
+        return HStack(spacing: DesignTokens.Spacing.xs) {
+            Image(systemName: iconName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(accentColor)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(feedback.message)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(DesignTokens.ink)
+                    .lineLimit(1)
+                Text(feedback.detail)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(DesignTokens.inkSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                state.dismissPopoverFeedback()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(DesignTokens.inkTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss sync status notice")
+            .accessibilityLabel("Dismiss sync notice")
+        }
+        .padding(.horizontal, DesignTokens.Spacing.xs)
+        .padding(.vertical, DesignTokens.Spacing.xxs)
+        .background(bgColor)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm)
+                .strokeBorder(accentColor.opacity(0.28), lineWidth: 1)
+        )
     }
 
     private var quickFilterBar: some View {
@@ -365,10 +438,13 @@ public struct MenuBarPopoverView: View {
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(items) { server in
+                        let key = "mcp:\(server.id)"
                         MenuBarServerRow(
                             state: state,
                             server: server,
-                            projectId: state.selectedProjectId
+                            projectId: state.selectedProjectId,
+                            isExpanded: expandedResourceKey == key,
+                            onToggleExpand: { toggleResourceExpansion(key: key) }
                         )
                     }
                 }
@@ -405,19 +481,25 @@ public struct MenuBarPopoverView: View {
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(localSkills) { localSkill in
+                        let key = "local:\(localSkill.id)"
                         MenuBarSkillRow(
                             state: state,
                             skill: localSkill,
                             projectId: state.selectedProjectId,
-                            isLocalProjectSkill: true
+                            isLocalProjectSkill: true,
+                            isExpanded: expandedResourceKey == key,
+                            onToggleExpand: { toggleResourceExpansion(key: key) }
                         )
                     }
                     ForEach(vaultSkills) { skill in
+                        let key = "skill:\(skill.id)"
                         MenuBarSkillRow(
                             state: state,
                             skill: skill,
                             projectId: state.selectedProjectId,
-                            isLocalProjectSkill: false
+                            isLocalProjectSkill: false,
+                            isExpanded: expandedResourceKey == key,
+                            onToggleExpand: { toggleResourceExpansion(key: key) }
                         )
                     }
                 }
@@ -450,10 +532,13 @@ public struct MenuBarPopoverView: View {
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(items) { plugin in
+                        let key = "plugin:\(plugin.id)"
                         MenuBarPluginRow(
                             state: state,
                             plugin: plugin,
-                            projectId: state.selectedProjectId
+                            projectId: state.selectedProjectId,
+                            isExpanded: expandedResourceKey == key,
+                            onToggleExpand: { toggleResourceExpansion(key: key) }
                         )
                     }
                 }

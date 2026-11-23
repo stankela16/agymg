@@ -1,15 +1,27 @@
 import SwiftUI
+import AppKit
 
 public struct MenuBarServerRow: View {
     @Bindable var state: AppState
     let server: MCPServerDefinition
     let projectId: String?
+    let isExpanded: Bool
+    let onToggleExpand: (() -> Void)?
     @State private var isHovered: Bool = false
+    @State private var isCopied: Bool = false
 
-    public init(state: AppState, server: MCPServerDefinition, projectId: String? = nil) {
+    public init(
+        state: AppState,
+        server: MCPServerDefinition,
+        projectId: String? = nil,
+        isExpanded: Bool = false,
+        onToggleExpand: (() -> Void)? = nil
+    ) {
         self.state = state
         self.server = server
         self.projectId = projectId
+        self.isExpanded = isExpanded
+        self.onToggleExpand = onToggleExpand
     }
 
     private var project: ProjectProfile? {
@@ -38,9 +50,45 @@ public struct MenuBarServerRow: View {
     }
 
     public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                rowHeaderButton
+                toggleControl
+            }
+
+            if isExpanded {
+                expandedDetailView
+            }
+        }
+        .padding(.horizontal, DesignTokens.Spacing.xs)
+        .padding(.vertical, DesignTokens.Spacing.xxs)
+        .background(isExpanded ? DesignTokens.surfaceContainerLow : (isHovered ? DesignTokens.surfaceContainerHigh : Color.clear))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isExpanded ? DesignTokens.cardBorder : Color.clear, lineWidth: 0.75)
+        )
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+    }
+
+    @ViewBuilder
+    private var rowHeaderButton: some View {
+        if let onToggleExpand {
+            Button(action: onToggleExpand) {
+                headerLabel
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(server.name) details" : "Inspect \(server.name) endpoint and health")
+        } else {
+            headerLabel
+        }
+    }
+
+    private var headerLabel: some View {
         HStack(spacing: DesignTokens.Spacing.xs) {
             Circle()
-                .fill(isEnabled ? DesignTokens.Colors.statusSuccess : DesignTokens.inkTertiary.opacity(0.4))
+                .fill(statusDotColor)
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -69,28 +117,117 @@ public struct MenuBarServerRow: View {
                             .clipShape(Capsule())
                             .help("Locally enabled for this project")
                     }
+
+                    if onToggleExpand != nil && (isHovered || isExpanded) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(DesignTokens.inkTertiary)
+                    }
                 }
 
-                Text(serverSubtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(DesignTokens.inkTertiary)
-                    .lineLimit(1)
+                if !isExpanded {
+                    Text(serverSubtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                        .lineLimit(1)
+                }
             }
 
-            Spacer()
-
-            toggleControl
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, DesignTokens.Spacing.xs)
-        .padding(.vertical, DesignTokens.Spacing.xxs)
-        .background(isHovered ? DesignTokens.surfaceContainerHigh : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
+    }
+
+    private var statusDotColor: Color {
+        if let health = state.mcpHealthByServerId[server.id], health.state == .error {
+            return DesignTokens.Colors.statusError
+        }
+        if isEnabled {
+            if let health = state.mcpHealthByServerId[server.id], health.state == .warning {
+                return DesignTokens.tierOrange
+            }
+            return DesignTokens.Colors.statusSuccess
+        }
+        return DesignTokens.inkTertiary.opacity(0.4)
+    }
+
+    private var expandedDetailView: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+            HStack(spacing: DesignTokens.Spacing.xxs) {
+                Text(server.transportLabel)
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(DesignTokens.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(DesignTokens.storeBlueTint)
+                    .clipShape(Capsule())
+
+                Text(server.category)
+                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DesignTokens.inkSecondary)
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(alignment: .top, spacing: DesignTokens.Spacing.xxs) {
+                Text(server.displayEndpoint)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(DesignTokens.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    let text = server.serverUrl ?? server.summary
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    withAnimation(DesignTokens.snappySpring) { isCopied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                        withAnimation(DesignTokens.snappySpring) { isCopied = false }
+                    }
+                } label: {
+                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(isCopied ? DesignTokens.Colors.statusSuccess : DesignTokens.inkTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Copy server endpoint")
+                .accessibilityLabel("Copy endpoint for \(server.name)")
+            }
+            .padding(DesignTokens.Spacing.xxs)
+            .background(DesignTokens.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+
+            if let health = state.mcpHealthByServerId[server.id],
+               health.state == .error || health.state == .warning {
+                HStack(alignment: .top, spacing: DesignTokens.Spacing.xxs) {
+                    Image(systemName: health.state == .error ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(health.state == .error ? DesignTokens.Colors.statusError : DesignTokens.tierOrange)
+                    Text("\(health.summary): \(health.detail)")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(health.state == .error ? DesignTokens.Colors.statusError : DesignTokens.tierOrange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Button {
+                state.navigationSelection = .masterVault
+                WindowRouter.triggerOpen()
+            } label: {
+                Label("Open in Control Center", systemImage: "macwindow")
+                    .font(.system(size: 9.5, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .help("Open \(server.name) in Control Center Master Vault")
+        }
+        .padding(.leading, 14)
+        .padding(.bottom, DesignTokens.Spacing.xxs)
     }
 
     private var serverSubtitle: String {
-        let base = server.summary.isEmpty ? (server.command ?? server.id) : server.summary
+        let base = server.displayEndpoint
         if isInheritedGlobal {
             return "Inherited • \(base)"
         }

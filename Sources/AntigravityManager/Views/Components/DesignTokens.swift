@@ -95,7 +95,7 @@ public enum DesignTokens: Sendable {
 
     public enum Dimensions: Sendable {
         public static let popoverWidth: CGFloat = 360, popoverMaxHeight: CGFloat = 480
-        public static let sidebarMinWidth: CGFloat = 240, sidebarIdealWidth: CGFloat = 280, sidebarMaxWidth: CGFloat = 340
+        public static let sidebarMinWidth: CGFloat = 220, sidebarIdealWidth: CGFloat = 240, sidebarMaxWidth: CGFloat = 290
         public static let windowMinWidth: CGFloat = 960, windowMinHeight: CGFloat = 660
         public static let statusDotSize: CGFloat = 7, statusDotLargeSize: CGFloat = 9, iconFrameWidth: CGFloat = 18
     }

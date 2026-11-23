@@ -21,7 +21,7 @@ public struct ProjectIsolationSidebarView: View {
             linkedSkillsCard
             gitSafetyAuditCard
         }
-        .frame(width: 280)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: project.id) {
             await state.refreshSafetyAudit(for: project)
         }

@@ -94,7 +94,7 @@ public struct ProjectServersTab: View {
     }
 
     private var serversGridView: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: DesignTokens.Spacing.md)], spacing: DesignTokens.Spacing.md) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: DesignTokens.Spacing.md)], spacing: DesignTokens.Spacing.md) {
             ForEach(filteredServers) { server in
                 serverCard(for: server)
             }
@@ -106,11 +106,15 @@ public struct ProjectServersTab: View {
         let isGlobal = state.globalServerIds.contains(server.id)
         let isProjectEnabled = project?.enabledMCPServerIds.contains(server.id) ?? false
         let projectName = project?.name ?? "project"
+        let health = state.mcpHealthByServerId[server.id]
+        let diagnosticSummary: String? = (health?.state == .error || health?.state == .warning)
+            ? health.map { "\($0.summary) — \($0.detail)" }
+            : nil
 
         return ResourceCardView(
             title: server.name,
-            subtitle: server.command ?? server.serverUrl ?? server.id,
-            summary: server.summary,
+            subtitle: server.displayEndpoint,
+            summary: diagnosticSummary,
             iconName: DesignTokens.Gradients.iconForCategory(server.category),
             iconGradient: DesignTokens.Gradients.forCategory(server.category),
             badges: {
