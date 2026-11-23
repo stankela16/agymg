@@ -545,8 +545,17 @@ public actor VaultService {
         }
 
         var mergedByPath: [String: ProjectProfile] = [:]
+        let projectMarkers = [".git", "Package.swift", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"]
         for saved in savedList {
             if FileManager.default.fileExists(atPath: saved.path) {
+                let leaf = URL(fileURLWithPath: saved.path).lastPathComponent
+                if ProjectScannerService.isIgnoredFolderName(leaf) {
+                    let savedURL = URL(fileURLWithPath: saved.path, isDirectory: true)
+                    let hasMarker = projectMarkers.contains { fm.fileExists(atPath: savedURL.appendingPathComponent($0).path) }
+                    if !hasMarker {
+                        continue
+                    }
+                }
                 mergedByPath[saved.path] = saved
             }
         }

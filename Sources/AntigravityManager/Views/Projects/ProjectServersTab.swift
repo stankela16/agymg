@@ -122,6 +122,11 @@ public struct ProjectServersTab: View {
                     ResourcePillBadge.projectPlugin
                         .help("Isolated for this project inside .agents/plugins/")
                 }
+                if let health = state.mcpHealthByServerId[server.id],
+                   health.state == .error || health.state == .warning {
+                    ResourcePillBadge.health(health)
+                        .help("\(health.summary): \(health.detail)")
+                }
             },
             actions: {
                 if isGlobal {

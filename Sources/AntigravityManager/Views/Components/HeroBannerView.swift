@@ -74,11 +74,11 @@ public struct HeroBannerView: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 Text(title).font(.system(size: 30, weight: .semibold)).foregroundStyle(DesignTokens.ink)
                 HStack(spacing: 5) {
-                    Circle().fill(DesignTokens.primary).frame(width: 7, height: 7)
-                    Text("ONLINE").font(.system(size: 11, weight: .bold)).foregroundStyle(DesignTokens.primary)
+                    Circle().fill(DesignTokens.Colors.statusSuccess).frame(width: 7, height: 7)
+                    Text("ONLINE").font(.system(size: 11, weight: .bold)).foregroundStyle(DesignTokens.Colors.statusSuccess)
                 }
-                .padding(.horizontal, 9).padding(.vertical, 4).background(DesignTokens.storeBlueTint).clipShape(Capsule())
-                .overlay(Capsule().strokeBorder(DesignTokens.primary.opacity(0.25), lineWidth: 0.5))
+                .padding(.horizontal, 9).padding(.vertical, 4).background(DesignTokens.Colors.statusSuccessBg).clipShape(Capsule())
+                .overlay(Capsule().strokeBorder(DesignTokens.Colors.statusSuccess.opacity(0.25), lineWidth: 0.5))
 
                 Text("v\(CLIRunner.currentVersion)").font(.system(size: 11, weight: .medium)).foregroundStyle(DesignTokens.inkSecondary)
                     .padding(.horizontal, 8).padding(.vertical, 3).background(DesignTokens.surfaceContainerLowest).clipShape(Capsule())
@@ -119,7 +119,7 @@ public struct HeroBannerView: View {
             HStack {
                 Text(item.label.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(DesignTokens.inkTertiary)
                 Spacer()
-                Image(systemName: item.icon).font(.system(size: 14)).foregroundStyle(DesignTokens.primary)
+                Image(systemName: item.icon).font(.system(size: 14)).foregroundStyle(DesignTokens.secondary)
             }
             HStack(alignment: .firstTextBaseline) {
                 Text(item.value).font(.system(size: 18, weight: .semibold)).foregroundStyle(DesignTokens.ink)
@@ -135,7 +135,7 @@ public struct HeroBannerView: View {
             }
             .frame(height: 4)
             HStack(spacing: 4) {
-                Circle().fill(DesignTokens.primary).frame(width: 5, height: 5)
+                Circle().fill(DesignTokens.secondary).frame(width: 5, height: 5)
                 Text(item.subtitle).font(.system(size: 11)).foregroundStyle(DesignTokens.inkTertiary).lineLimit(1)
             }
         }

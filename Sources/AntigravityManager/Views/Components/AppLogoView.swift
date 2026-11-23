@@ -42,14 +42,14 @@ public struct AppLogoView: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [Color(hex: 0x15382B), Color(hex: 0x0A1F17)],
+                            colors: [Color(hex: 0x1B1F32), Color(hex: 0x0D0F18)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                Image(systemName: "bolt.shield.fill")
-                    .font(.system(size: size * 0.5, weight: .bold))
-                    .foregroundStyle(DesignTokens.primary)
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: size * 0.48, weight: .bold))
+                    .foregroundStyle(DesignTokens.secondary)
             }
             .frame(width: size, height: size)
             .overlay {

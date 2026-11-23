@@ -3,10 +3,12 @@ import SwiftUI
 public struct ProjectIsolationSidebarView: View {
     public let project: ProjectProfile
     public let state: AppState
+    public let onLinkSkillTap: (() -> Void)?
 
-    public init(project: ProjectProfile, state: AppState) {
+    public init(project: ProjectProfile, state: AppState, onLinkSkillTap: (() -> Void)? = nil) {
         self.project = project
         self.state = state
+        self.onLinkSkillTap = onLinkSkillTap
     }
 
     private var audit: ProjectSafetyAudit {
@@ -90,24 +92,32 @@ public struct ProjectIsolationSidebarView: View {
     }
 
     private var linkedSkillsCard: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+        let sortedSkills = project.enabledSkillIds.sorted()
+        let remainingCount = max(0, sortedSkills.count - 4)
+        return VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             HStack {
                 HStack(spacing: DesignTokens.Spacing.xxs) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11))
                         .foregroundStyle(DesignTokens.secondary)
-                    Text("Linked Skills (\(project.enabledSkillIds.count) Active)")
+                    Text("Linked Skills (\(sortedSkills.count) Active)")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(DesignTokens.ink)
                 }
                 Spacer()
-                Text("+ Link Skill")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(DesignTokens.secondary)
+                Button {
+                    onLinkSkillTap?()
+                } label: {
+                    Text("+ Link Skill")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(DesignTokens.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Open Linked Skills tab")
             }
 
             VStack(spacing: DesignTokens.Spacing.xxs) {
-                ForEach(Array(project.enabledSkillIds.prefix(4)), id: \.self) { skillId in
+                ForEach(Array(sortedSkills.prefix(4)), id: \.self) { skillId in
                     HStack(spacing: DesignTokens.Spacing.xxs) {
                         Circle().fill(DesignTokens.secondary).frame(width: 5, height: 5)
                         Text(skillId).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(DesignTokens.ink)
@@ -116,7 +126,21 @@ public struct ProjectIsolationSidebarView: View {
                         Text("Active").font(.system(size: 8.5, design: .monospaced)).foregroundStyle(DesignTokens.secondary)
                     }
                 }
-                if project.enabledSkillIds.isEmpty {
+                if remainingCount > 0 {
+                    Button {
+                        onLinkSkillTap?()
+                    } label: {
+                        HStack {
+                            Text("+ \(remainingCount) more skill\(remainingCount == 1 ? "" : "s")…")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(DesignTokens.secondary)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show all \(sortedSkills.count) linked skills")
+                }
+                if sortedSkills.isEmpty {
                     Text("No linked skills.").font(.system(size: 9.5)).foregroundStyle(DesignTokens.inkTertiary)
                 }
             }

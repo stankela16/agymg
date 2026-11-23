@@ -2,6 +2,11 @@ import Foundation
 import AppKit
 import Observation
 
+public enum CopySetupMode: String, Sendable {
+    case merge
+    case replace
+}
+
 @MainActor
 @Observable
 public final class AppState {
@@ -17,6 +22,8 @@ public final class AppState {
     public var projectSafetyAudits: [String: ProjectSafetyAudit] = [:]
     public var projectRecommendations: [String: [ResourceRecommendation]] = [:]
     public var projectStackLabels: [String: [String]] = [:]
+    public var mcpHealthByServerId: [String: MCPServerHealthStatus] = [:]
+    public var driftIssues: [DriftIssue] = []
 
     public var globalServerIds: Set<String> = []
     public var globalSkillIds: Set<String> = []
@@ -58,6 +65,8 @@ public final class AppState {
     let pluginScanner = PluginScannerService()
     let projectAuditService = ProjectAuditService()
     let recommendationService = ProjectRecommendationService()
+    let diagnosticsService = MCPDiagnosticsService()
+    let skillImportService = SkillImportService()
     @ObservationIgnored let workspaceMonitor = ActiveWorkspaceMonitor()
 
     @ObservationIgnored private let isAutoloadEnabled: Bool
@@ -245,6 +254,7 @@ public final class AppState {
             message: "System initialized with \(self.servers.count) MCPs, \(self.skills.count) skills, \(self.plugins.count) plugins, \(self.projects.count) projects",
             details: "Master Vault catalog initialized and local environments scanned."
         )
+        await refreshDiagnostics()
     }
 
     @discardableResult
@@ -314,6 +324,7 @@ public final class AppState {
         }
 
         await refreshAllRecommendations()
+        await refreshDiagnostics()
 
         if let first = discovered.first {
             selectedProjectId = first.id
@@ -334,8 +345,34 @@ public final class AppState {
         projectSafetyAudits = [:]
         projectRecommendations = [:]
         projectStackLabels = [:]
+        driftIssues.removeAll { $0.scope.hasPrefix("project:") }
         navigationSelection = .masterVault
         statusMessage = "Projects folder authorization reset"
+    }
+
+    public func refreshDiagnostics() async {
+        let diag = self.diagnosticsService
+        let curServers = self.servers
+        let curGlobalS = self.globalServerIds
+        let curSkills = self.skills
+        let curGlobalSk = self.globalSkillIds
+        let curProjects = self.projects
+
+        let (healthMap, drift) = await Task.detached(priority: .utility) {
+            let health = diag.inspectAllServers(curServers)
+            let driftReport = diag.detectDrift(
+                servers: curServers,
+                globalServerIds: curGlobalS,
+                skills: curSkills,
+                globalSkillIds: curGlobalSk,
+                projects: curProjects
+            )
+            return (health, driftReport.issues)
+        }.value
+
+        guard !Task.isCancelled else { return }
+        self.mcpHealthByServerId = healthMap
+        self.driftIssues = drift
     }
 
     public func reloadSkills() {
@@ -460,23 +497,17 @@ public final class AppState {
         self.projectStackLabels[proj.id] = labels
     }
 
-    public func enableRecommendedResource(_ rec: ResourceRecommendation, for projectId: String) {
-        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        switch rec.kind {
-        case .mcp:
-            projects[index].enabledMCPServerIds.insert(rec.id)
-        case .skill:
-            projects[index].enabledSkillIds.insert(rec.id)
-        case .plugin:
-            projects[index].enabledPluginIds.insert(rec.id)
-        }
-        projectRecommendations[projectId]?.removeAll { $0.uniqueKey == rec.uniqueKey }
-        triggerProjectSync(project: projects[index], debounceNanoseconds: 150_000_000)
+    public func dismissedRecommendationCount(for projectId: String) -> Int {
+        projects.first(where: { $0.id == projectId })?.dismissedRecommendationKeys.count ?? 0
     }
 
-    public func enableAllRecommendations(for projectId: String) {
-        guard let index = projects.firstIndex(where: { $0.id == projectId }),
-              let recs = projectRecommendations[projectId], !recs.isEmpty else { return }
+    public func enableRecommendedResource(_ rec: ResourceRecommendation, for projectId: String) {
+        enableRecommendations([rec], for: projectId)
+    }
+
+    public func enableRecommendations(_ recs: [ResourceRecommendation], for projectId: String) {
+        guard !recs.isEmpty, let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        var enabledKeys: Set<String> = []
         for rec in recs {
             switch rec.kind {
             case .mcp:
@@ -486,9 +517,42 @@ public final class AppState {
             case .plugin:
                 projects[index].enabledPluginIds.insert(rec.id)
             }
+            enabledKeys.insert(rec.uniqueKey)
         }
-        projectRecommendations[projectId] = []
+        projectRecommendations[projectId]?.removeAll { enabledKeys.contains($0.uniqueKey) }
         triggerProjectSync(project: projects[index], debounceNanoseconds: 150_000_000)
+    }
+
+    public func enableAllRecommendations(for projectId: String) {
+        guard let recs = projectRecommendations[projectId], !recs.isEmpty else { return }
+        enableRecommendations(recs, for: projectId)
+    }
+
+    public func dismissRecommendation(_ rec: ResourceRecommendation, for projectId: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[index].dismissedRecommendationKeys.insert(rec.uniqueKey)
+        projectRecommendations[projectId]?.removeAll { $0.uniqueKey == rec.uniqueKey }
+        lastLocalChangeDate = Date()
+        let curProjects = projects
+        statusMessage = "Dismissed suggestion '\(rec.name)' for \(projects[index].name)"
+        Task { [weak self] in
+            await self?.vaultService.saveProjects(curProjects)
+        }
+    }
+
+    public func resetDismissedRecommendations(for projectId: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        guard !projects[index].dismissedRecommendationKeys.isEmpty else { return }
+        projects[index].dismissedRecommendationKeys.removeAll()
+        lastLocalChangeDate = Date()
+        let curProjects = projects
+        let projName = projects[index].name
+        statusMessage = "Restored dismissed suggestions for \(projName)"
+        Task { [weak self] in
+            guard let self else { return }
+            await self.vaultService.saveProjects(curProjects)
+            await self.refreshRecommendations(for: projectId)
+        }
     }
 
     @discardableResult
@@ -770,6 +834,86 @@ public final class AppState {
         )
         statusMessage = "Created skill '\(displayName)'"
         return newSkill
+    }
+
+    @discardableResult
+    public func importVaultSkill(
+        fromFolder folderURL: URL,
+        customId: String? = nil,
+        overwrite: Bool = false
+    ) async throws -> SkillDefinition {
+        let imported = try skillImportService.importFromLocalFolder(
+            sourceURL: folderURL,
+            customId: customId,
+            overwrite: overwrite
+        )
+        finalizeImportedSkill(imported, sourceLabel: folderURL.lastPathComponent)
+        return imported
+    }
+
+    @discardableResult
+    public func importVaultSkill(
+        fromGitHubURL rawURL: String,
+        customId: String? = nil,
+        overwrite: Bool = false
+    ) async throws -> SkillDefinition {
+        let imported = try await skillImportService.importFromGitHubURL(
+            rawURL,
+            customId: customId,
+            overwrite: overwrite
+        )
+        finalizeImportedSkill(imported, sourceLabel: rawURL)
+        return imported
+    }
+
+    private func finalizeImportedSkill(_ imported: SkillDefinition, sourceLabel: String) {
+        skills.removeAll { $0.id == imported.id }
+        skills.append(imported)
+        skills.sort { $0.name.lowercased() < $1.name.lowercased() }
+        reloadSkills()
+        logSyncEvent(
+            status: .success,
+            category: .vault,
+            targetName: imported.name,
+            message: "Imported skill '\(imported.id)' into Master Vault",
+            details: "Source: \(sourceLabel)"
+        )
+        statusMessage = "Imported skill '\(imported.name)'"
+    }
+
+    // MARK: - Copy Project Setup
+    public func copySetup(
+        from sourceProjectId: String,
+        to targetProjectId: String,
+        mode: CopySetupMode = .merge
+    ) {
+        guard sourceProjectId != targetProjectId,
+              let sourceProject = projects.first(where: { $0.id == sourceProjectId }),
+              let targetIndex = projects.firstIndex(where: { $0.id == targetProjectId }) else {
+            return
+        }
+
+        switch mode {
+        case .merge:
+            projects[targetIndex].enabledMCPServerIds.formUnion(sourceProject.enabledMCPServerIds)
+            projects[targetIndex].enabledSkillIds.formUnion(sourceProject.enabledSkillIds)
+            projects[targetIndex].enabledPluginIds.formUnion(sourceProject.enabledPluginIds)
+        case .replace:
+            projects[targetIndex].enabledMCPServerIds = sourceProject.enabledMCPServerIds
+            projects[targetIndex].enabledSkillIds = sourceProject.enabledSkillIds
+            projects[targetIndex].enabledPluginIds = sourceProject.enabledPluginIds
+        }
+
+        let updatedTarget = projects[targetIndex]
+        triggerProjectSync(project: updatedTarget, debounceNanoseconds: 0)
+        logSyncEvent(
+            status: .info,
+            category: .project,
+            targetName: updatedTarget.name,
+            message: "Copied setup from '\(sourceProject.name)' (\(mode.rawValue))",
+            details: "MCPs: \(updatedTarget.enabledMCPServerIds.count), Skills: \(updatedTarget.enabledSkillIds.count), Plugins: \(updatedTarget.enabledPluginIds.count)"
+        )
+        statusMessage = "Copied setup from '\(sourceProject.name)' to '\(updatedTarget.name)'"
     }
 
     // MARK: - MCP Server Management

@@ -22,46 +22,47 @@ extension Color {
 }
 
 public enum DesignTokens: Sendable {
-    // MARK: - Surfaces & Backgrounds
-    public static let background = Color.dynamic(light: 0xF8FAF9, dark: 0x0D1310)
+    // MARK: - Architectural Neutral Surfaces & Backgrounds (Zero Green Cast)
+    public static let background = Color.dynamic(light: 0xF6F7F9, dark: 0x0E1015)
     public static let surface = background
-    public static let surfaceContainerLowest = Color.dynamic(light: 0xFFFFFF, dark: 0x141A17)
-    public static let surfaceContainerLow = Color.dynamic(light: 0xF2F4F3, dark: 0x1A221F)
-    public static let surfaceContainer = Color.dynamic(light: 0xECEEED, dark: 0x1F2824)
-    public static let surfaceContainerHigh = Color.dynamic(light: 0xE6E9E8, dark: 0x25312C)
-    public static let panel = Color.dynamic(light: 0xF2F4F3, dark: 0x161D19)
-    public static let fog = Color.dynamic(light: 0xE1E3E2, dark: 0x26322C)
+    public static let surfaceContainerLowest = Color.dynamic(light: 0xFFFFFF, dark: 0x151821)
+    public static let surfaceContainerLow = Color.dynamic(light: 0xF0F2F6, dark: 0x1B1F2B)
+    public static let surfaceContainer = Color.dynamic(light: 0xE8EBF1, dark: 0x222736)
+    public static let surfaceContainerHigh = Color.dynamic(light: 0xDDE1EA, dark: 0x2B3144)
+    public static let panel = Color.dynamic(light: 0xEFEFF3, dark: 0x12141B)
+    public static let fog = Color.dynamic(light: 0xE4E7EF, dark: 0x262B3B)
 
-    // MARK: - Primary Emerald & Mint Core
-    public static let primary = Color.dynamic(light: 0x002217, dark: 0x6FFBBE)
-    public static let primaryContainer = Color.dynamic(light: 0x15382B, dark: 0x003A26)
+    // MARK: - Obsidian & Electric Iris Brand Core
+    public static let primary = Color.dynamic(light: 0x1A1D2B, dark: 0xE8ECFF)
+    public static let primaryContainer = Color.dynamic(light: 0x4F46E5, dark: 0x5B5BF0)
     public static let onPrimary = Color.white
-    public static let onPrimaryContainer = Color.dynamic(light: 0x7DA291, dark: 0xA9CFBC)
+    public static let onPrimaryContainer = Color.dynamic(light: 0xE0E7FF, dark: 0xC7D2FE)
 
-    public static let secondary = Color.dynamic(light: 0x006C49, dark: 0x4EDEA3)
-    public static let secondaryContainer = Color.dynamic(light: 0x6CF8BB, dark: 0x005137)
-    public static let onSecondaryContainer = Color.dynamic(light: 0x00714D, dark: 0x6FFBBE)
-    public static let secondaryFixed = Color.dynamic(light: 0x6FFBBE, dark: 0x005236)
-    public static let secondaryFixedDim = Color.dynamic(light: 0x4EDEA3, dark: 0x003A26)
+    public static let secondary = Color.dynamic(light: 0x4338CA, dark: 0x818CF8)
+    public static let secondaryContainer = Color.dynamic(light: 0xC7D2FE, dark: 0x312E81)
+    public static let onSecondaryContainer = Color.dynamic(light: 0x3730A3, dark: 0xA5B4FC)
+    public static let secondaryFixed = Color.dynamic(light: 0xC7D2FE, dark: 0x3730A3)
+    public static let secondaryFixedDim = Color.dynamic(light: 0xA5B4FC, dark: 0x2E2A72)
 
-    // Legacy aliases bridged to Stitch palette
-    public static let storeBlueTint = Color.dynamic(light: 0xEDFAF3, dark: 0x13271F)
-    public static let onSecondaryFixedVariant = Color.dynamic(light: 0x005236, dark: 0x6FFBBE)
-    public static let tierOrange = Color.dynamic(light: 0xE58929, dark: 0xF5A047)
-    public static let badgeOrange = Color.dynamic(light: 0xFA8C16, dark: 0xDB6D28)
+    // Brand Tints & Signal Amber Accent
+    public static let brandTint = Color.dynamic(light: 0xEEF0FF, dark: 0x1D213B)
+    public static let storeBlueTint = brandTint
+    public static let onSecondaryFixedVariant = Color.dynamic(light: 0x312E81, dark: 0xC7D2FE)
+    public static let tierOrange = Color.dynamic(light: 0xD97706, dark: 0xF5A524)
+    public static let badgeOrange = Color.dynamic(light: 0xEA580C, dark: 0xFB923C)
 
     // MARK: - Inks & Text
-    public static let ink = Color.dynamic(light: 0x191C1C, dark: 0xEFF1F0)
-    public static let inkSecondary = Color.dynamic(light: 0x414844, dark: 0x9AA59F)
-    public static let inkTertiary = Color.dynamic(light: 0x717974, dark: 0x6D7A73)
-    public static let slate = Color.dynamic(light: 0x5D6862, dark: 0x8A9690)
-    public static let steel = Color.dynamic(light: 0x7A8780, dark: 0x829189)
+    public static let ink = Color.dynamic(light: 0x14171F, dark: 0xF1F3F9)
+    public static let inkSecondary = Color.dynamic(light: 0x4B5263, dark: 0x9AA2B5)
+    public static let inkTertiary = Color.dynamic(light: 0x767E91, dark: 0x6C7488)
+    public static let slate = Color.dynamic(light: 0x5C6478, dark: 0x8B93A8)
+    public static let steel = Color.dynamic(light: 0x7A8296, dark: 0x7E869B)
 
     // MARK: - Dividers & Borders
-    public static let hairline = Color.dynamic(light: 0xECEEED, dark: 0x1F2824)
-    public static let divider = Color.dynamic(light: 0xE1E3E2, dark: 0x243029)
-    public static let cardBorder = Color.dynamic(light: 0xDCE0DE, dark: 0x27342D)
-    public static let cardHoverBorder = Color.dynamic(light: 0x006C49, dark: 0x4EDEA3)
+    public static let hairline = Color.dynamic(light: 0xE6E9F0, dark: 0x1F2433)
+    public static let divider = Color.dynamic(light: 0xDDE1EA, dark: 0x262C3D)
+    public static let cardBorder = Color.dynamic(light: 0xD5DAE6, dark: 0x2C3347)
+    public static let cardHoverBorder = Color.dynamic(light: 0x4F46E5, dark: 0x818CF8)
     public static let borderHairline: CGFloat = 0.5
     public static let borderStandard: CGFloat = 1.0
     public static let borderActiveRing: CGFloat = 2.0
@@ -71,7 +72,7 @@ public enum DesignTokens: Sendable {
     public static let obsidianBase = background, obsidianSurface = surfaceContainerLowest
     public static let obsidianSurfaceHover = surfaceContainerLow, obsidianElevated = panel, obsidianWell = surfaceContainerLow
     public static let studioPrimary = ink, studioMuted = inkSecondary, studioSubtle = inkTertiary
-    public static let neonEmerald = Color(hex: 0x006C49), electricIndigo = primaryContainer, electricViolet = secondary, studioAmber = tierOrange
+    public static let neonEmerald = Color.dynamic(light: 0x4338CA, dark: 0x818CF8), electricIndigo = primaryContainer, electricViolet = secondary, studioAmber = tierOrange
 
     public static let cardGradient = LinearGradient(colors: [canvas, canvas], startPoint: .top, endPoint: .bottom)
     public static let cardHoverGradient = LinearGradient(colors: [canvas, panel], startPoint: .top, endPoint: .bottom)
@@ -109,14 +110,21 @@ public enum DesignTokens: Sendable {
         public static var cardShadow: Color { Color.black.opacity(0.04) }
         public static var cardHoverShadow: Color { Color.black.opacity(0.08) }
         public static let statusActive = DesignTokens.secondary, statusInactive = DesignTokens.steel
+        public static let statusSuccess = Color.dynamic(light: 0x10915D, dark: 0x34D399)
+        public static let statusSuccessBg = Color.dynamic(light: 0xECFDF5, dark: 0x112B22)
         public static let statusSyncing = DesignTokens.tierOrange, statusProject = DesignTokens.secondary
-        public static let statusError = Color(hex: 0xBA1A1A), statusWarning = DesignTokens.tierOrange
-        public static let statusActiveBg = DesignTokens.storeBlueTint
+        public static let statusError = Color.dynamic(light: 0xDC2626, dark: 0xF87171), statusWarning = DesignTokens.tierOrange
+        public static let statusActiveBg = DesignTokens.brandTint
         public static let statusInactiveBg = DesignTokens.surfaceContainerHigh
         public static let statusSyncingBg = DesignTokens.tierOrange.opacity(0.12)
-        public static let statusProjectBg = DesignTokens.storeBlueTint
-        public static let statusErrorBg = Color(hex: 0xBA1A1A).opacity(0.12)
+        public static let statusProjectBg = DesignTokens.brandTint
+        public static let statusErrorBg = Color.dynamic(light: 0xFEF2F2, dark: 0x2F171A)
         public static let statusWarningBg = DesignTokens.tierOrange.opacity(0.12)
+        public static let accentViolet = Color.dynamic(light: 0x7C3AED, dark: 0xA78BFA)
+        public static let accentVioletBg = Color.dynamic(light: 0xF3E8FF, dark: 0x261B3E)
+        public static let codeBackground = Color.dynamic(light: 0x11131C, dark: 0x0B0D13)
+        public static let codeBorder = Color.dynamic(light: 0x262B3D, dark: 0x222738)
+        public static let codeText = Color(hex: 0xA5B4FC)
     }
 
     public enum Materials: Sendable {
@@ -125,19 +133,22 @@ public enum DesignTokens: Sendable {
     }
 
     public enum Gradients: Sendable {
-        public static let emeraldAccent = LinearGradient(colors: [Color(hex: 0x006C49), Color(hex: 0x002217)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        public static let mintGlow = LinearGradient(colors: [Color(hex: 0x6CF8BB), Color(hex: 0x4EDEA3)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        public static let forestDark = LinearGradient(colors: [Color(hex: 0x15382B), Color(hex: 0x0A1F17)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        public static let vault = LinearGradient(colors: [Color(hex: 0x1B3529), Color(hex: 0x0D1F17)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        public static let coreTools = emeraldAccent
-        public static let djiEngineering = emeraldAccent, appleSwift = emeraldAccent
-        public static let videoRemotion = emeraldAccent, multiAgent = emeraldAccent, webFrontend = emeraldAccent
+        public static let brandAccent = LinearGradient(colors: [Color(hex: 0x4F46E5), Color(hex: 0x312E81)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        public static let irisGlow = LinearGradient(colors: [Color(hex: 0x818CF8), Color(hex: 0x4F46E5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        public static let obsidianDark = LinearGradient(colors: [Color(hex: 0x1E2235), Color(hex: 0x10131E)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        public static let emeraldAccent = brandAccent
+        public static let mintGlow = irisGlow
+        public static let forestDark = obsidianDark
+        public static let vault = LinearGradient(colors: [Color(hex: 0x242842), Color(hex: 0x121524)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        public static let coreTools = brandAccent
+        public static let djiEngineering = brandAccent, appleSwift = brandAccent
+        public static let videoRemotion = brandAccent, multiAgent = brandAccent, webFrontend = brandAccent
 
         public static func forCategory(_ category: String) -> LinearGradient {
             let c = category.lowercased()
             if c.contains("vault") || c.contains("security") { return vault }
-            if c.contains("plugin") { return forestDark }
-            return emeraldAccent
+            if c.contains("plugin") { return obsidianDark }
+            return brandAccent
         }
 
         public static func iconForCategory(_ category: String) -> String {

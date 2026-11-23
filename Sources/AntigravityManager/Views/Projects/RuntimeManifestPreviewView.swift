@@ -186,13 +186,13 @@ public struct RuntimeManifestPreviewView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(manifestJSON)
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Color(hex: 0x81C784))
+                    .foregroundStyle(DesignTokens.Colors.codeText)
                     .padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(hex: 0x07110C))
+            .background(DesignTokens.Colors.codeBackground)
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0x1A2E24), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DesignTokens.Colors.codeBorder, lineWidth: 1))
         }
         .padding(12)
         .background(DesignTokens.surfaceContainerLowest)

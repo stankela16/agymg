@@ -89,6 +89,19 @@ public struct ResourcePillBadge: View {
             isMonospaced: true
         )
     }
+
+    public static func health(_ status: MCPServerHealthStatus) -> ResourcePillBadge {
+        let isError = status.state == .error
+        let color = isError ? DesignTokens.Colors.statusError : DesignTokens.tierOrange
+        let bg = isError ? DesignTokens.Colors.statusErrorBg : DesignTokens.Colors.statusWarningBg
+        return ResourcePillBadge(
+            title: isError ? "ERROR" : "WARN",
+            icon: isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill",
+            color: color,
+            backgroundColor: bg,
+            isMonospaced: true
+        )
+    }
 }
 
 public struct KeyboardShortcutBadge: View {

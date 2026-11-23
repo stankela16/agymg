@@ -19,7 +19,7 @@ public struct ControlCenterSidebar: View {
                     navItem(title: "Master Vault", icon: "shield.lefthalf.filled", badge: "All Resources", section: .masterVault)
                     navItem(title: "Global Core", icon: "globe", badge: "Always Active", section: .globalCore)
                     navItem(title: "Plugins", icon: "puzzlepiece.extension", badge: "\(state.plugins.count) Packages", section: .plugins)
-                    navItem(title: "System Built-ins", icon: "wrench.and.screwdriver", badge: "\(state.builtinSkills.count > 0 ? "\(state.builtinSkills.count)" : "18") Tools", section: .systemBuiltins)
+                    navItem(title: "System Built-ins", icon: "wrench.and.screwdriver", badge: "\(state.builtinSkills.count) Tools", section: .systemBuiltins)
                 }
 
                 Section {
@@ -130,10 +130,12 @@ public struct ControlCenterSidebar: View {
 
     private func projectRow(project: ProjectProfile) -> some View {
         let isSelected = selection == .project(project.id)
+        let dotInfo = projectDotStatus(for: project)
         return HStack(spacing: 8) {
             Circle()
-                .fill(project.enabledMCPServerIds.isEmpty ? DesignTokens.tierOrange : DesignTokens.secondary)
+                .fill(dotInfo.color)
                 .frame(width: 7, height: 7)
+                .help(dotInfo.help)
             Text(project.name).font(.system(size: 13, weight: .medium))
                 .foregroundStyle(itemTextColor(isSelected: isSelected)).lineLimit(1)
             Spacer()
@@ -173,14 +175,63 @@ public struct ControlCenterSidebar: View {
                 Text("Native macOS Control Center").font(.system(size: 10)).foregroundStyle(DesignTokens.inkTertiary)
             }
             Spacer()
+            let health = coreHealthStatus
             HStack(spacing: 4) {
-                Circle().fill(DesignTokens.secondary).frame(width: 5, height: 5)
-                Text("CORE OK").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(DesignTokens.secondary)
+                Circle().fill(health.color).frame(width: 5, height: 5)
+                Text(health.label).font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(health.color)
             }
-            .padding(.horizontal, 8).padding(.vertical, 2).background(DesignTokens.storeBlueTint).clipShape(Capsule())
+            .padding(.horizontal, 8).padding(.vertical, 2).background(health.background).clipShape(Capsule())
+            .help(health.tooltip)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .overlay(Divider().background(DesignTokens.hairline), alignment: .bottom)
+    }
+
+    private func projectDotStatus(for project: ProjectProfile) -> (color: Color, help: String) {
+        let audit = state.projectSafetyAudits[project.id]
+        if audit?.overallStatus == .failed {
+            return (DesignTokens.Colors.statusError, "Safety audit failed")
+        }
+        if audit?.overallStatus == .warning && !project.enabledMCPServerIds.isEmpty {
+            return (DesignTokens.tierOrange, "Project requires sync or .gitignore protection")
+        }
+        let hasLocalSkills = !(state.projectLocalSkills[project.id]?.isEmpty ?? true)
+        let hasScoped = !project.enabledMCPServerIds.isEmpty
+            || !project.enabledSkillIds.isEmpty
+            || !project.enabledPluginIds.isEmpty
+            || hasLocalSkills
+        if hasScoped {
+            return (DesignTokens.secondary, "Project has scoped resources")
+        }
+        return (DesignTokens.inkTertiary.opacity(0.6), "Inherits Global Core")
+    }
+
+    private var coreHealthStatus: (label: String, color: Color, background: Color, tooltip: String) {
+        if state.isSyncing {
+            return ("SYNCING", DesignTokens.tierOrange, DesignTokens.tierOrange.opacity(0.14), "Synchronizing Vault and workspaces")
+        }
+        let audits = state.projects.compactMap { project -> (ProjectProfile, ProjectSafetyAudit)? in
+            guard let audit = state.projectSafetyAudits[project.id] else { return nil }
+            return (project, audit)
+        }
+        let activeServerIds = state.globalServerIds.union(state.projects.flatMap(\.enabledMCPServerIds))
+        let activeHealth = state.mcpHealthByServerId.filter { activeServerIds.contains($0.key) }.values
+        let auditFailed = audits.filter { $0.1.overallStatus == .failed }.count
+        let mcpErrors = activeHealth.filter { $0.state == .error }.count
+        let driftErrors = state.driftIssues.filter { $0.severity == .error }.count
+        let totalErrors = auditFailed + mcpErrors + driftErrors
+        if totalErrors > 0 {
+            return ("\(totalErrors) ERR", DesignTokens.Colors.statusError, DesignTokens.Colors.statusErrorBg, "\(totalErrors) issue(s) detected across MCPs or workspaces")
+        }
+
+        let auditWarn = audits.filter { $0.1.overallStatus == .warning && !$0.0.enabledMCPServerIds.isEmpty }.count
+        let mcpWarnings = activeHealth.filter { $0.state == .warning }.count
+        let driftWarnings = state.driftIssues.filter { $0.severity == .warning }.count
+        let totalWarnings = auditWarn + mcpWarnings + driftWarnings
+        if totalWarnings > 0 {
+            return ("\(totalWarnings) WARN", DesignTokens.tierOrange, DesignTokens.tierOrange.opacity(0.14), "\(totalWarnings) warning(s) across MCPs, drift, or workspace audits")
+        }
+        return ("CORE OK", DesignTokens.Colors.statusSuccess, DesignTokens.Colors.statusSuccessBg, "Master Vault, MCPs, and all checked workspaces are healthy")
     }
 
     private func itemTextColor(isSelected: Bool) -> Color {

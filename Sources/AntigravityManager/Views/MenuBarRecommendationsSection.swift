@@ -5,6 +5,9 @@ public struct MenuBarRecommendationsSection: View {
     let projectId: String
     let recommendations: [ResourceRecommendation]
     let stackLabels: [String]
+    @State private var isExpanded: Bool = false
+
+    private let collapsedLimit: Int = 3
 
     public init(
         state: AppState,
@@ -19,15 +22,36 @@ public struct MenuBarRecommendationsSection: View {
     }
 
     public var body: some View {
-        if recommendations.isEmpty {
-            allActiveBanner
-        } else {
-            missingRecommendationsCard
+        Group {
+            if recommendations.isEmpty {
+                allActiveBanner
+            } else {
+                missingRecommendationsCard
+            }
+        }
+        .onChange(of: projectId) { _, _ in
+            isExpanded = false
         }
     }
 
     private var stackBadgeText: String {
         stackLabels.isEmpty ? "Repo Stack" : stackLabels.joined(separator: " · ")
+    }
+
+    private var dismissedCount: Int {
+        state.dismissedRecommendationCount(for: projectId)
+    }
+
+    private var essentialRecommendations: [ResourceRecommendation] {
+        recommendations.filter { $0.priority == .high }
+    }
+
+    private var hiddenCount: Int {
+        max(0, recommendations.count - collapsedLimit)
+    }
+
+    private var visibleRecommendations: [ResourceRecommendation] {
+        isExpanded ? recommendations : Array(recommendations.prefix(collapsedLimit))
     }
 
     private var hasAnyProjectSpecificResources: Bool {
@@ -44,7 +68,7 @@ public struct MenuBarRecommendationsSection: View {
         return HStack(spacing: DesignTokens.Spacing.xs) {
             Image(systemName: isConfigured ? "checkmark.seal.fill" : "info.circle.fill")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isConfigured ? Color.green : DesignTokens.secondary)
+                .foregroundStyle(isConfigured ? DesignTokens.Colors.statusSuccess : DesignTokens.secondary)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: DesignTokens.Spacing.xxs) {
@@ -62,21 +86,25 @@ public struct MenuBarRecommendationsSection: View {
                 }
 
                 Text(isConfigured
-                     ? "All recommended Vault tools for this stack are active"
+                     ? "All active Vault recommendations for this stack are enabled"
                      : "No project tools active — select MCP/Skills below")
                     .font(.system(size: 10))
                     .foregroundStyle(DesignTokens.inkSecondary)
                     .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
+
+            if dismissedCount > 0 {
+                restoreDismissedButton
+            }
         }
         .padding(DesignTokens.Spacing.xs)
         .background(DesignTokens.surfaceContainerLow)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm)
-                .strokeBorder(isConfigured ? Color.green.opacity(0.25) : DesignTokens.cardBorder, lineWidth: 1)
+                .strokeBorder(isConfigured ? DesignTokens.Colors.statusSuccess.opacity(0.28) : DesignTokens.cardBorder, lineWidth: 1)
         )
     }
 
@@ -102,29 +130,61 @@ public struct MenuBarRecommendationsSection: View {
                         .lineLimit(1)
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                if recommendations.count > 1 {
-                    Button {
-                        state.enableAllRecommendations(for: projectId)
-                    } label: {
-                        Text("Enable All (\(recommendations.count))")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(DesignTokens.secondary)
-                            .padding(.horizontal, DesignTokens.Spacing.xxs)
-                            .padding(.vertical, 2)
-                            .background(DesignTokens.storeBlueTint)
-                            .clipShape(Capsule())
+                headerActionButton
+            }
+
+            if isExpanded && recommendations.count > 5 {
+                ScrollView {
+                    VStack(spacing: DesignTokens.Spacing.xxs) {
+                        ForEach(visibleRecommendations, id: \.uniqueKey) { rec in
+                            recommendationRow(rec)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .help("Enable all recommended tools for this project at once")
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: 196)
+            } else {
+                VStack(spacing: DesignTokens.Spacing.xxs) {
+                    ForEach(visibleRecommendations, id: \.uniqueKey) { rec in
+                        recommendationRow(rec)
+                    }
                 }
             }
 
-            VStack(spacing: DesignTokens.Spacing.xxs) {
-                ForEach(Array(recommendations.prefix(3)), id: \.uniqueKey) { rec in
-                    recommendationRow(rec)
+            if hiddenCount > 0 || dismissedCount > 0 {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    if hiddenCount > 0 {
+                        Button {
+                            withAnimation(DesignTokens.snappySpring) {
+                                isExpanded.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                Text(isExpanded
+                                     ? "Show fewer"
+                                     : "Show \(hiddenCount) more (\(recommendations.count) total)")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                            }
+                            .foregroundStyle(DesignTokens.secondary)
+                            .padding(.vertical, 2)
+                        }
+                        .buttonStyle(.plain)
+                        .help(isExpanded
+                              ? "Collapse recommendations back to top 3"
+                              : "Reveal all \(recommendations.count) recommended tools before enabling")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if dismissedCount > 0 {
+                        restoreDismissedButton
+                    }
                 }
+                .padding(.top, 2)
             }
         }
         .padding(DesignTokens.Spacing.xs)
@@ -136,21 +196,98 @@ public struct MenuBarRecommendationsSection: View {
         )
     }
 
+    @ViewBuilder
+    private var headerActionButton: some View {
+        if !isExpanded && !essentialRecommendations.isEmpty && essentialRecommendations.count < recommendations.count {
+            Button {
+                state.enableRecommendations(essentialRecommendations, for: projectId)
+            } label: {
+                Text("Enable Essential (\(essentialRecommendations.count))")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DesignTokens.secondary)
+                    .padding(.horizontal, DesignTokens.Spacing.xxs)
+                    .padding(.vertical, 2)
+                    .background(DesignTokens.storeBlueTint)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Enable \(essentialRecommendations.count) essential stack tools: \(essentialRecommendations.map(\.name).joined(separator: ", "))")
+        } else if !isExpanded && hiddenCount > 0 {
+            Button {
+                withAnimation(DesignTokens.snappySpring) {
+                    isExpanded = true
+                }
+            } label: {
+                Text("Show All (\(recommendations.count))")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DesignTokens.tierOrange)
+                    .padding(.horizontal, DesignTokens.Spacing.xxs)
+                    .padding(.vertical, 2)
+                    .background(DesignTokens.tierOrange.opacity(0.14))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Expand to inspect all \(recommendations.count) recommended tools")
+        } else if recommendations.count > 1 {
+            Button {
+                state.enableAllRecommendations(for: projectId)
+            } label: {
+                Text("Enable All (\(recommendations.count))")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DesignTokens.secondary)
+                    .padding(.horizontal, DesignTokens.Spacing.xxs)
+                    .padding(.vertical, 2)
+                    .background(DesignTokens.storeBlueTint)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Enable all \(recommendations.count) visible tools: \(recommendations.map(\.name).joined(separator: ", "))")
+        }
+    }
+
+    private var restoreDismissedButton: some View {
+        Button {
+            state.resetDismissedRecommendations(for: projectId)
+        } label: {
+            Text("Restore \(dismissedCount) dismissed")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(DesignTokens.inkSecondary)
+                .underline()
+        }
+        .buttonStyle(.plain)
+        .help("Restore \(dismissedCount) dismissed suggestion(s) for this project")
+    }
+
     private func recommendationRow(_ rec: ResourceRecommendation) -> some View {
-        HStack(spacing: DesignTokens.Spacing.xs) {
+        let kindColor = rec.priority == .low ? DesignTokens.inkSecondary : DesignTokens.tierOrange
+        let kindBg = rec.priority == .low ? DesignTokens.surfaceContainer : DesignTokens.tierOrange.opacity(0.14)
+
+        return HStack(spacing: DesignTokens.Spacing.xs) {
             Text(rec.kind.displayLabel)
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(DesignTokens.tierOrange)
+                .foregroundStyle(kindColor)
                 .padding(.horizontal, DesignTokens.Spacing.xxs)
                 .padding(.vertical, 2)
-                .background(DesignTokens.tierOrange.opacity(0.14))
+                .background(kindBg)
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.xs))
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(rec.name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DesignTokens.ink)
-                    .lineLimit(1)
+                HStack(spacing: DesignTokens.Spacing.xxs) {
+                    Text(rec.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(DesignTokens.ink)
+                        .lineLimit(1)
+
+                    if rec.priority == .low {
+                        Text("OPT")
+                            .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(DesignTokens.inkTertiary)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(DesignTokens.surfaceContainer)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
 
                 Text(rec.reason)
                     .font(.system(size: 9))
@@ -158,7 +295,20 @@ public struct MenuBarRecommendationsSection: View {
                     .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
+
+            Button {
+                state.dismissRecommendation(rec, for: projectId)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(DesignTokens.inkTertiary)
+                    .frame(width: 18, height: 18)
+                    .background(DesignTokens.surfaceContainerLow)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss \(rec.name) suggestion for this project")
 
             Button {
                 state.enableRecommendedResource(rec, for: projectId)

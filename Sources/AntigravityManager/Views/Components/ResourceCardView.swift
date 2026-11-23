@@ -71,15 +71,15 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
     private var topRow: some View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
-                Circle().fill(DesignTokens.storeBlueTint)
+                Circle().fill(DesignTokens.brandTint)
                     .frame(width: 38, height: 38)
                 Image(systemName: iconName)
                     .font(.system(size: 17))
-                    .foregroundStyle(DesignTokens.primary)
+                    .foregroundStyle(DesignTokens.secondary)
             }
             .overlay(
                 Circle()
-                    .strokeBorder(DesignTokens.primary.opacity(0.2), lineWidth: 1)
+                    .strokeBorder(DesignTokens.secondary.opacity(0.22), lineWidth: 1)
             )
 
             VStack(alignment: .leading, spacing: 4) {
@@ -119,7 +119,7 @@ public struct ResourceCardView<LeadingBadge: View, Actions: View>: View {
             } label: {
                 Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 11))
-                    .foregroundStyle(isCopied ? DesignTokens.primary : DesignTokens.inkTertiary)
+                    .foregroundStyle(isCopied ? DesignTokens.secondary : DesignTokens.inkTertiary)
             }
             .buttonStyle(.plain)
             .help("Copy CLI command: \(cmd)")

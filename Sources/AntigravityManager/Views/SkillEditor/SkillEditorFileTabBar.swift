@@ -36,8 +36,8 @@ public struct SkillEditorFileTabBar: View {
                         }
                         .padding(.horizontal, DesignTokens.Spacing.sm + 2)
                         .padding(.vertical, DesignTokens.Spacing.xs + 1)
-                        .background(isSelected ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.08))
-                        .foregroundStyle(isSelected ? Color.blue : Color.primary)
+                        .background(isSelected ? DesignTokens.brandTint : DesignTokens.surfaceContainer)
+                        .foregroundStyle(isSelected ? DesignTokens.secondary : DesignTokens.ink)
                         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
                     }
                     .buttonStyle(.plain)

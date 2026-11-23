@@ -15,13 +15,13 @@ public struct OnboardingSuccessBadge: View {
         VStack(spacing: DesignTokens.Spacing.md) {
             ZStack {
                 Circle()
-                    .fill(Color.green.opacity(0.15))
+                    .fill(DesignTokens.Colors.statusSuccessBg)
                     .frame(width: 72, height: 72)
-                    .shadow(color: Color.green.opacity(0.3), radius: 12)
+                    .shadow(color: DesignTokens.Colors.statusSuccess.opacity(0.25), radius: 12)
 
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 38))
-                    .foregroundStyle(Color.green)
+                    .foregroundStyle(DesignTokens.Colors.statusSuccess)
             }
 
             VStack(spacing: DesignTokens.Spacing.xxs) {
@@ -63,7 +63,7 @@ public struct OnboardingSuccessBadge: View {
                 .padding(.vertical, DesignTokens.Spacing.xs)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color.green)
+            .tint(DesignTokens.primaryContainer)
             .controlSize(.regular)
             .keyboardShortcut(.defaultAction)
             .help("Finish setup and open the Control Center")
@@ -73,7 +73,7 @@ public struct OnboardingSuccessBadge: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md)
-                .strokeBorder(Color.green.opacity(0.3), lineWidth: 1.5)
+                .strokeBorder(DesignTokens.Colors.statusSuccess.opacity(0.3), lineWidth: 1.5)
         )
     }
 }

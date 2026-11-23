@@ -46,6 +46,10 @@ public struct ProjectDetailView: View {
         return localIds.union(project.enabledSkillIds).count
     }
 
+    private var stackLabels: [String] {
+        state.projectStackLabels[project.id] ?? []
+    }
+
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -53,6 +57,7 @@ public struct ProjectDetailView: View {
                 headerSection
                 projectStatsBar
                 ProjectIsolationBannerView(projectName: project.name)
+                ProjectRecommendationsCard(state: state, projectId: project.id)
 
                 HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
                     // Left Column
@@ -74,7 +79,11 @@ public struct ProjectDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     // Right Column
-                    ProjectIsolationSidebarView(project: project, state: state)
+                    ProjectIsolationSidebarView(
+                        project: project,
+                        state: state,
+                        onLinkSkillTap: { selectedTab = 1 }
+                    )
                 }
             }
             .padding(DesignTokens.Spacing.lg)
@@ -88,13 +97,25 @@ public struct ProjectDetailView: View {
             Text("/").font(.system(size: 10)).foregroundStyle(DesignTokens.inkTertiary)
             Text(project.name).font(.system(size: 11, weight: .bold)).foregroundStyle(DesignTokens.ink)
 
-            Text("Active")
-                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(DesignTokens.secondary)
-                .padding(.horizontal, 5).padding(.vertical, 1.5)
-                .background(DesignTokens.secondaryContainer.opacity(0.3))
-                .clipShape(Capsule())
+            if state.selectedProjectId == project.id {
+                Text("Active Workspace")
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(DesignTokens.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1.5)
+                    .background(DesignTokens.secondaryContainer.opacity(0.3))
+                    .clipShape(Capsule())
+            }
             Spacer()
+        }
+    }
+
+    private var copySourceProjects: [ProjectProfile] {
+        state.projects.filter {
+            $0.id != project.id && (
+                !$0.enabledMCPServerIds.isEmpty
+                || !$0.enabledSkillIds.isEmpty
+                || !$0.enabledPluginIds.isEmpty
+            )
         }
     }
 
@@ -125,6 +146,15 @@ public struct ProjectDetailView: View {
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(DesignTokens.surfaceContainer)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                    ForEach(stackLabels, id: \.self) { label in
+                        Text(label)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(DesignTokens.secondary)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(DesignTokens.storeBlueTint)
+                            .clipShape(Capsule())
+                    }
                 }
             }
 
@@ -156,6 +186,38 @@ public struct ProjectDetailView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .help("Open Terminal in this folder")
+
+                if !copySourceProjects.isEmpty {
+                    Menu {
+                        Section("Merge Tools From Project") {
+                            ForEach(copySourceProjects) { source in
+                                Button {
+                                    state.copySetup(from: source.id, to: project.id, mode: .merge)
+                                } label: {
+                                    Text("\(source.name) (\(source.enabledMCPServerIds.count) MCP · \(source.enabledSkillIds.count) Skills · \(source.enabledPluginIds.count) Plugins)")
+                                }
+                            }
+                        }
+                        Menu("Replace Setup Instead") {
+                            ForEach(copySourceProjects) { source in
+                                Button(role: .destructive) {
+                                    state.copySetup(from: source.id, to: project.id, mode: .replace)
+                                } label: {
+                                    Text("Replace with \(source.name)")
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.on.doc")
+                            Text("Copy Setup")
+                        }
+                        .font(.system(size: 11))
+                    }
+                    .menuStyle(.borderedButton)
+                    .controlSize(.small)
+                    .help("Copy MCP servers, skills, and plugins from another configured project")
+                }
 
                 Button {
                     state.triggerProjectSync(project: project)

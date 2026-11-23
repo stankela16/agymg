@@ -191,7 +191,7 @@ public struct EditMCPServerSheet: View {
                                 envPairs.removeAll { $0.id == pair.id }
                             } label: {
                                 Image(systemName: "trash")
-                                    .foregroundStyle(Color(hex: 0xF5222D))
+                                    .foregroundStyle(DesignTokens.Colors.statusError)
                             }
                             .buttonStyle(.plain)
                         }
@@ -241,7 +241,7 @@ public struct EditMCPServerSheet: View {
                             headerPairs.removeAll { $0.id == pair.id }
                         } label: {
                             Image(systemName: "trash")
-                                .foregroundStyle(Color(hex: 0xF5222D))
+                                .foregroundStyle(DesignTokens.Colors.statusError)
                         }
                         .buttonStyle(.plain)
                     }

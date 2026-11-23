@@ -63,10 +63,10 @@ public struct SlashCommandsTab: View {
             actions: {
                 Text(cmd.command)
                     .font(.system(.subheadline, design: .monospaced).bold())
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(DesignTokens.Colors.accentViolet)
                     .padding(.horizontal, DesignTokens.Spacing.sm)
                     .padding(.vertical, DesignTokens.Spacing.xs)
-                    .background(Color.purple.opacity(0.12))
+                    .background(DesignTokens.Colors.accentVioletBg)
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
                     .help("Slash command: \(cmd.command)")
             }
@@ -96,11 +96,11 @@ public struct SlashCommandsTab: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 ZStack {
                     Circle()
-                        .fill(Color.purple.opacity(0.15))
+                        .fill(DesignTokens.Colors.accentVioletBg)
                         .frame(width: 44, height: 44)
                     Image(systemName: "terminal.fill")
                         .font(.system(size: 20))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(DesignTokens.Colors.accentViolet)
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -110,10 +110,10 @@ public struct SlashCommandsTab: View {
                     HStack(spacing: 8) {
                         Text(cmd.command)
                             .font(.system(.subheadline, design: .monospaced).bold())
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(DesignTokens.Colors.accentViolet)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
-                            .background(Color.purple.opacity(0.12))
+                            .background(DesignTokens.Colors.accentVioletBg)
                             .clipShape(Capsule())
 
                         ResourcePillBadge.category(cmd.category)
@@ -150,7 +150,7 @@ public struct SlashCommandsTab: View {
                         HStack {
                             Text(cmd.command)
                                 .font(.system(.body, design: .monospaced).bold())
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(DesignTokens.Colors.accentViolet)
                             Text("+ your prompt or task")
                                 .font(.system(size: 13))
                                 .foregroundStyle(DesignTokens.inkSecondary)
@@ -190,10 +190,10 @@ public struct SlashCommandsTab: View {
                             Spacer()
                             Text("Runtime Directive")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(DesignTokens.Colors.accentViolet)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.purple.opacity(0.1))
+                                .background(DesignTokens.Colors.accentVioletBg)
                                 .clipShape(Capsule())
                         }
 

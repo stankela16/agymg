@@ -113,6 +113,7 @@ extension AppState {
                 duration: duration
             )
             await self.refreshAllRecommendations()
+            await self.refreshDiagnostics()
         } catch {
             guard !Task.isCancelled else { return }
             let duration = CFAbsoluteTimeGetCurrent() - startTime
@@ -177,6 +178,7 @@ extension AppState {
             )
             await self.refreshSafetyAudit(for: currentProject)
             await self.refreshRecommendations(for: currentProject.id)
+            await self.refreshDiagnostics()
         } catch {
             guard !Task.isCancelled else { return }
             let duration = CFAbsoluteTimeGetCurrent() - startTime
@@ -244,6 +246,8 @@ extension AppState {
                     details: "Global: \(curGlobalS.count) MCPs, \(curGlobalSk.count) skills, \(curGlobalP.count) plugins\nProjects: \(curProjects.map(\.name).joined(separator: ", "))",
                     duration: duration
                 )
+                await self.refreshAllSafetyAudits()
+                await self.refreshDiagnostics()
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 let duration = CFAbsoluteTimeGetCurrent() - startTime
@@ -344,6 +348,7 @@ extension AppState {
                 merged.enabledMCPServerIds.formUnion(existing.enabledMCPServerIds)
                 merged.enabledSkillIds.formUnion(existing.enabledSkillIds)
                 merged.enabledPluginIds.formUnion(existing.enabledPluginIds)
+                merged.dismissedRecommendationKeys = existing.dismissedRecommendationKeys
                 updated.append(merged)
             } else {
                 updated.append(disc)
@@ -385,6 +390,7 @@ extension AppState {
         self.projectLocalSkills = rescannedLocalSkills
         self.projectSafetyAudits = rescannedAudits
         await refreshAllRecommendations()
+        await refreshDiagnostics()
 
         if selectedProjectId == nil || !updated.contains(where: { $0.id == selectedProjectId }) {
             selectedProjectId = updated.first?.id

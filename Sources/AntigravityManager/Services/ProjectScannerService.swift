@@ -3,6 +3,31 @@ import Foundation
 public struct ProjectScannerService: Sendable {
     public init() {}
 
+    public static func isIgnoredFolderName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        if trimmed.hasPrefix(".") || trimmed.hasPrefix("_") { return true }
+        return trimmed.lowercased() == "archived"
+    }
+
+    public static func isInsideIgnoredContainer(_ path: String, rootPrefix: String? = nil) -> Bool {
+        let ignoredContainers: Set<String> = ["_archive", "_backups", "archived"]
+        let stdPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        if let rootPrefix, !rootPrefix.isEmpty {
+            let stdRoot = URL(fileURLWithPath: rootPrefix).standardizedFileURL.path
+            if stdPath.hasPrefix(stdRoot + "/") {
+                let rel = String(stdPath.dropFirst(stdRoot.count + 1))
+                let components = rel.split(separator: "/").map { String($0).lowercased() }
+                if components.contains(where: { ignoredContainers.contains($0) || $0.hasPrefix("_") }) {
+                    return true
+                }
+            }
+        }
+        let parentName = URL(fileURLWithPath: stdPath).deletingLastPathComponent().lastPathComponent.lowercased()
+        let leafName = URL(fileURLWithPath: stdPath).lastPathComponent.lowercased()
+        return ignoredContainers.contains(parentName) || ignoredContainers.contains(leafName)
+    }
+
     public func discoverProjects(in customDirectory: URL? = nil, scanDefaultWhenNil: Bool = true) -> [ProjectProfile] {
         let fm = FileManager.default
         var projectsByPath: [String: ProjectProfile] = [:]
@@ -49,7 +74,7 @@ public struct ProjectScannerService: Sendable {
                 var isDir: ObjCBool = false
                 if fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue {
                     let folderName = dir.lastPathComponent
-                    if !folderName.hasPrefix("."), folderName != "archived" {
+                    if !Self.isIgnoredFolderName(folderName) {
                         registerCandidate(name: folderName, path: dir.path)
                     }
                 }
@@ -68,7 +93,8 @@ public struct ProjectScannerService: Sendable {
                     continue
                 }
                 let folderName = URL(fileURLWithPath: rawPath).lastPathComponent
-                guard !folderName.isEmpty, folderName != "archived" else { continue }
+                guard !Self.isIgnoredFolderName(folderName),
+                      !Self.isInsideIgnoredContainer(rawPath, rootPrefix: authorizedPrefix) else { continue }
                 registerCandidate(name: folderName, path: rawPath)
             }
         }

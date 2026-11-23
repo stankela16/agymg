@@ -86,7 +86,7 @@ public struct SkillEditorHeaderView: View {
                 }
                 .controlSize(.small)
                 .buttonStyle(.bordered)
-                .tint(.purple)
+                .tint(DesignTokens.Colors.accentViolet)
                 .help("Copy this skill into your Master Vault for permanent customization")
             }
 
@@ -137,10 +137,10 @@ public struct SkillEditorHeaderView: View {
 
     private var originMetadata: (String, Color) {
         switch skill.origin {
-        case .projectLocal: ("Local Project", .blue)
-        case .vault: ("Master Vault", .purple)
-        case .global: ("Global Core", .green)
-        case .builtin: ("Built-in", .orange)
+        case .projectLocal: ("Local Project", DesignTokens.secondary)
+        case .vault: ("Master Vault", DesignTokens.Colors.accentViolet)
+        case .global: ("Global Core", DesignTokens.Colors.statusSuccess)
+        case .builtin: ("Built-in", DesignTokens.tierOrange)
         }
     }
 }

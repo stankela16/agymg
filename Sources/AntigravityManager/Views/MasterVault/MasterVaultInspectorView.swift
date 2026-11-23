@@ -66,41 +66,91 @@ public struct MasterVaultInspectorView: View {
     }
 
     private var engineHealthCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let totalServers = state.servers.count
+        let healthValues = Array(state.mcpHealthByServerId.values)
+        let errorCount = healthValues.filter { $0.state == .error }.count
+        let warnCount = healthValues.filter { $0.state == .warning }.count
+        let healthyCount = max(0, totalServers - errorCount - warnCount)
+        let driftCount = state.driftIssues.count
+
+        let badgeTitle: String = {
+            if errorCount > 0 { return "\(errorCount) ERR" }
+            if warnCount > 0 || driftCount > 0 { return "\(warnCount + driftCount) WARN" }
+            return "READY"
+        }()
+        let badgeColor: Color = errorCount > 0
+            ? DesignTokens.Colors.statusError
+            : ((warnCount > 0 || driftCount > 0) ? DesignTokens.tierOrange : DesignTokens.Colors.statusSuccess)
+        let badgeBg: Color = errorCount > 0
+            ? DesignTokens.Colors.statusErrorBg
+            : ((warnCount > 0 || driftCount > 0) ? DesignTokens.Colors.statusWarningBg : DesignTokens.Colors.statusSuccessBg)
+
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(systemName: errorCount > 0 ? "xmark.octagon.fill" : ((warnCount > 0 || driftCount > 0) ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"))
                         .font(.system(size: 12))
-                        .foregroundStyle(DesignTokens.secondary)
+                        .foregroundStyle(badgeColor)
                     Text("System Status")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(DesignTokens.ink)
                 }
                 Spacer()
-                Text("READY")
+                Button {
+                    Task { await state.refreshDiagnostics() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Re-run MCP health and config drift checks")
+
+                Text(badgeTitle)
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(DesignTokens.secondary)
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .background(DesignTokens.secondaryContainer.opacity(0.3))
+                    .foregroundStyle(badgeColor)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(badgeBg)
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text("MCP Config:").font(.system(size: 9.5)).foregroundStyle(DesignTokens.inkTertiary)
+                    Text("MCP Health:").font(.system(size: 9.5)).foregroundStyle(DesignTokens.inkTertiary)
                     Spacer()
-                    Text("~/.gemini/config").font(.system(size: 9.5, weight: .medium, design: .monospaced)).foregroundStyle(DesignTokens.inkSecondary)
+                    Text("\(healthyCount)/\(totalServers) OK")
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(errorCount > 0 ? DesignTokens.Colors.statusError : (warnCount > 0 ? DesignTokens.tierOrange : DesignTokens.Colors.statusSuccess))
                 }
                 HStack {
-                    Text("Master Vault:").font(.system(size: 9.5)).foregroundStyle(DesignTokens.inkTertiary)
+                    Text("Config Drift:").font(.system(size: 9.5)).foregroundStyle(DesignTokens.inkTertiary)
                     Spacer()
-                    Text("~/.gemini/manager-vault").font(.system(size: 9.5, weight: .medium, design: .monospaced)).foregroundStyle(DesignTokens.inkSecondary)
+                    Text(driftCount == 0 ? "In sync" : "\(driftCount) \(driftCount == 1 ? "issue" : "issues")")
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(driftCount == 0 ? DesignTokens.secondary : DesignTokens.tierOrange)
                 }
                 HStack {
                     Text("Last Sync:").font(.system(size: 9.5)).foregroundStyle(DesignTokens.inkTertiary)
                     Spacer()
                     Text(state.lastSyncDate?.formatted(date: .omitted, time: .shortened) ?? "Not synced yet").font(.system(size: 9.5, weight: .medium, design: .monospaced)).foregroundStyle(DesignTokens.secondary)
                 }
+            }
+
+            if driftCount > 0 {
+                Button {
+                    state.syncAll()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wand.and.stars")
+                        Text("Fix Drift (Sync All)")
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(DesignTokens.primaryContainer)
+                .controlSize(.mini)
+                .help(state.driftIssues.prefix(3).map(\.detail).joined(separator: "\n"))
             }
         }
         .padding(12)

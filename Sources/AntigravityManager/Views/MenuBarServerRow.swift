@@ -40,7 +40,7 @@ public struct MenuBarServerRow: View {
     public var body: some View {
         HStack(spacing: DesignTokens.Spacing.xs) {
             Circle()
-                .fill(isEnabled ? Color.green : DesignTokens.inkTertiary.opacity(0.4))
+                .fill(isEnabled ? DesignTokens.Colors.statusSuccess : DesignTokens.inkTertiary.opacity(0.4))
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 1) {

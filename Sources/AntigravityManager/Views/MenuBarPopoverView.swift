@@ -10,6 +10,8 @@ public enum MenuBarResourceTab: String, CaseIterable, Sendable {
 public struct MenuBarPopoverView: View {
     @Bindable var state: AppState
     @State private var selectedTab: MenuBarResourceTab = .mcp
+    @State private var searchText: String = ""
+    @State private var showActiveOnly: Bool = false
     @State private var isHoveredOpen: Bool = false
     @State private var isHoveredSettings: Bool = false
     @State private var isHoveredQuit: Bool = false
@@ -62,14 +64,16 @@ public struct MenuBarPopoverView: View {
 
     private var headerSection: some View {
         HStack(spacing: DesignTokens.Spacing.xs) {
-            Circle()
-                .fill(Color.green)
-                .frame(width: 8, height: 8)
-                .shadow(color: Color.green.opacity(0.6), radius: 3)
+            AppLogoView(size: 18, cornerRadius: 4.5, showBorder: true)
 
             Text("agymg")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(DesignTokens.ink)
+
+            Circle()
+                .fill(DesignTokens.Colors.statusSuccess)
+                .frame(width: 6, height: 6)
+                .help("Master Vault active")
 
             Spacer()
 
@@ -103,10 +107,22 @@ public struct MenuBarPopoverView: View {
 
     private var activeContextSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
-            HStack {
+            HStack(spacing: DesignTokens.Spacing.xxs) {
                 Text("ACTIVE CONTEXT")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(DesignTokens.inkSecondary)
+
+                if state.selectedProject != nil, let badge = formattedWorkspaceSourceBadge {
+                    Text(badge)
+                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(DesignTokens.inkSecondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(DesignTokens.surfaceContainer)
+                        .clipShape(Capsule())
+                        .help("Detected workspace source: \(state.activeWorkspaceSource ?? "auto")")
+                }
+
                 Spacer()
                 if let selected = state.selectedProject {
                     Text(projectSummaryText(for: selected))
@@ -148,10 +164,69 @@ public struct MenuBarPopoverView: View {
             .pickerStyle(.menu)
             .controlSize(.small)
             .help("Select active project for quick inspection")
+
+            if let selected = state.selectedProject {
+                HStack(spacing: DesignTokens.Spacing.xxs) {
+                    quickContextButton(icon: "folder", title: "Finder") {
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: selected.path)
+                    }
+                    .help("Reveal project folder in Finder")
+
+                    quickContextButton(icon: "terminal", title: "Terminal") {
+                        state.openTerminal(for: selected.path)
+                    }
+                    .help("Open Terminal in \(selected.name)")
+
+                    quickContextButton(icon: "arrow.triangle.2.circlepath", title: "Sync") {
+                        state.syncProject(selected)
+                    }
+                    .help("Synchronize \(selected.name) now")
+
+                    quickContextButton(icon: "macwindow", title: "Open") {
+                        state.navigationSelection = .project(selected.id)
+                        WindowRouter.triggerOpen()
+                    }
+                    .help("Open \(selected.name) in Control Center")
+                }
+            }
         }
         .padding(DesignTokens.Spacing.xs)
         .background(DesignTokens.surfaceContainerLow)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+    }
+
+    private func quickContextButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 9.5, weight: .medium))
+            }
+            .foregroundStyle(DesignTokens.inkSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 3)
+            .background(DesignTokens.surfaceContainerLowest)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(DesignTokens.cardBorder, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var formattedWorkspaceSourceBadge: String? {
+        guard let raw = state.activeWorkspaceSource?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        let lower = raw.lowercased()
+        if lower == "xcode" { return "XCODE" }
+        if lower == "ide-focus" { return "IDE" }
+        if lower == "session-start" { return "HOOK" }
+        if lower.hasPrefix("cli") { return "CLI" }
+        return raw.uppercased()
     }
 
     private func projectSummaryText(for project: ProjectProfile) -> String {
@@ -176,6 +251,8 @@ public struct MenuBarPopoverView: View {
             .pickerStyle(.segmented)
             .controlSize(.small)
             .help("Switch between MCP servers, skills, and plugins")
+
+            quickFilterBar
 
             HStack {
                 Text(sectionHeaderTitle)
@@ -206,11 +283,81 @@ public struct MenuBarPopoverView: View {
         return min(max(calculated, 88), 224)
     }
 
+    private var quickFilterBar: some View {
+        HStack(spacing: DesignTokens.Spacing.xxs) {
+            HStack(spacing: DesignTokens.Spacing.xxs) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10))
+                    .foregroundStyle(DesignTokens.inkTertiary)
+
+                TextField("Filter \(selectedTab.rawValue.lowercased())...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignTokens.ink)
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(DesignTokens.inkTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search filter")
+                }
+            }
+            .padding(.horizontal, DesignTokens.Spacing.xs)
+            .padding(.vertical, 4)
+            .background(DesignTokens.surfaceContainerLow)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(DesignTokens.divider, lineWidth: 0.5)
+            )
+
+            Button {
+                showActiveOnly.toggle()
+            } label: {
+                Text("Active")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(showActiveOnly ? Color.white : DesignTokens.inkSecondary)
+                    .padding(.horizontal, DesignTokens.Spacing.xs)
+                    .padding(.vertical, 4)
+                    .background(showActiveOnly ? DesignTokens.primaryContainer : DesignTokens.surfaceContainerLow)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(showActiveOnly ? Color.clear : DesignTokens.divider, lineWidth: 0.5)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Show only enabled resources for the active scope")
+        }
+    }
+
+    private func matchesSearch(_ fields: String...) -> Bool {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        return fields.contains { $0.localizedCaseInsensitiveContains(trimmed) }
+    }
+
     @ViewBuilder
     private var serversListContent: some View {
-        let items = sortedServers
-        if items.isEmpty {
+        let projEnabled = state.selectedProject?.enabledMCPServerIds ?? []
+        let globalEnabled = state.globalServerIds
+        let items = sortedServers.filter { server in
+            let isActive = projEnabled.contains(server.id) || globalEnabled.contains(server.id)
+            if showActiveOnly && !isActive { return false }
+            return matchesSearch(server.name, server.id, server.summary)
+        }
+        if state.servers.isEmpty {
             Text("No MCP servers registered")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.inkTertiary)
+                .padding(.vertical, DesignTokens.Spacing.xxs)
+        } else if items.isEmpty {
+            Text("No matching MCP servers")
                 .font(.system(size: 11))
                 .foregroundStyle(DesignTokens.inkTertiary)
                 .padding(.vertical, DesignTokens.Spacing.xxs)
@@ -233,11 +380,24 @@ public struct MenuBarPopoverView: View {
 
     @ViewBuilder
     private var skillsListContent: some View {
-        let localSkills = currentProjectLocalOnlySkills
-        let vaultSkills = sortedSkills
+        let projEnabled = state.selectedProject?.enabledSkillIds ?? []
+        let globalEnabled = state.globalSkillIds
+        let localSkills = currentProjectLocalOnlySkills.filter { skill in
+            matchesSearch(skill.name, skill.id, skill.description)
+        }
+        let vaultSkills = sortedSkills.filter { skill in
+            let isActive = projEnabled.contains(skill.id) || globalEnabled.contains(skill.id)
+            if showActiveOnly && !isActive { return false }
+            return matchesSearch(skill.name, skill.id, skill.description)
+        }
         let totalCount = localSkills.count + vaultSkills.count
-        if totalCount == 0 {
+        if state.skills.isEmpty && currentProjectLocalOnlySkills.isEmpty {
             Text("No skills registered in Vault")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.inkTertiary)
+                .padding(.vertical, DesignTokens.Spacing.xxs)
+        } else if totalCount == 0 {
+            Text("No matching skills")
                 .font(.system(size: 11))
                 .foregroundStyle(DesignTokens.inkTertiary)
                 .padding(.vertical, DesignTokens.Spacing.xxs)
@@ -269,9 +429,20 @@ public struct MenuBarPopoverView: View {
 
     @ViewBuilder
     private var pluginsListContent: some View {
-        let items = sortedPlugins
-        if items.isEmpty {
+        let projEnabled = state.selectedProject?.enabledPluginIds ?? []
+        let globalEnabled = state.globalPluginIds
+        let items = sortedPlugins.filter { plugin in
+            let isActive = projEnabled.contains(plugin.id) || globalEnabled.contains(plugin.id)
+            if showActiveOnly && !isActive { return false }
+            return matchesSearch(plugin.name, plugin.id, plugin.description)
+        }
+        if state.plugins.isEmpty {
             Text("No plugins registered in Vault")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.inkTertiary)
+                .padding(.vertical, DesignTokens.Spacing.xxs)
+        } else if items.isEmpty {
+            Text("No matching plugins")
                 .font(.system(size: 11))
                 .foregroundStyle(DesignTokens.inkTertiary)
                 .padding(.vertical, DesignTokens.Spacing.xxs)
@@ -409,7 +580,7 @@ public struct MenuBarPopoverView: View {
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                actionRow(title: "Quit agymg", icon: "power", shortcut: "⌘Q", isHovered: isHoveredQuit, iconColor: Color.red.opacity(0.85))
+                actionRow(title: "Quit agymg", icon: "power", shortcut: "⌘Q", isHovered: isHoveredQuit, iconColor: DesignTokens.Colors.statusError.opacity(0.85))
             }
             .buttonStyle(.plain)
             .keyboardShortcut("q", modifiers: [.command])

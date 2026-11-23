@@ -96,7 +96,7 @@ public struct SkillScannerService: Sendable {
         return results.sorted { $0.id < $1.id }
     }
 
-    private func extractDescription(from content: String) -> String {
+    public func extractDescription(from content: String) -> String {
         let lines = content.components(separatedBy: .newlines)
         var readingMultiLine = false
         var multiLineCollected: [String] = []
@@ -139,7 +139,7 @@ public struct SkillScannerService: Sendable {
         return ""
     }
 
-    private func formatSkillName(_ id: String) -> String {
+    public func formatSkillName(_ id: String) -> String {
         id.split(separator: "-")
             .map { $0.capitalized }
             .joined(separator: " ")

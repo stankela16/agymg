@@ -61,9 +61,15 @@ public final class ActiveWorkspaceMonitor {
             || lowerBundle.contains("vscode")
             || lowerBundle.contains("com.microsoft.vscode")
             || lowerBundle.contains("todesktop")
+            || lowerBundle.contains("com.apple.dt.xcode")
+            || lowerBundle.contains("windsurf")
+            || lowerBundle.contains("dev.zed.zed")
             || lowerName.contains("antigravity")
             || lowerName.contains("cursor")
             || lowerName.contains("visual studio code")
+            || lowerName == "xcode"
+            || lowerName.contains("windsurf")
+            || lowerName == "zed"
     }
 
     public func stop() {
@@ -171,6 +177,15 @@ public final class ActiveWorkspaceMonitor {
             for profDir in profileDirs {
                 targetedStorageFiles.append(profDir.appendingPathComponent("home/Library/Application Support/Cursor/User/globalStorage/storage.json"))
             }
+        } else if lowerBundle.contains("windsurf") || lowerName.contains("windsurf") {
+            targetedStorageFiles.append(home.appendingPathComponent("Library/Application Support/Windsurf/User/globalStorage/storage.json"))
+            for profDir in profileDirs {
+                targetedStorageFiles.append(profDir.appendingPathComponent("home/Library/Application Support/Windsurf/User/globalStorage/storage.json"))
+            }
+        } else if lowerBundle.contains("com.apple.dt.xcode") || lowerName == "xcode" {
+            if let xcodeWorkspace = detectLatestXcodeDerivedDataWorkspace(home: home) {
+                return (xcodeWorkspace, "xcode")
+            }
         } else if lowerBundle.contains("vscode") || lowerName.contains("visual studio code") {
             targetedStorageFiles.append(home.appendingPathComponent("Library/Application Support/Code/User/globalStorage/storage.json"))
             for profDir in profileDirs {
@@ -214,6 +229,7 @@ public final class ActiveWorkspaceMonitor {
             home.appendingPathComponent("Library/Application Support/Antigravity IDE/User/globalStorage/storage.json"),
             home.appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/storage.json"),
             home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/storage.json"),
+            home.appendingPathComponent("Library/Application Support/Windsurf/User/globalStorage/storage.json"),
             home.appendingPathComponent("Library/Application Support/Code/User/globalStorage/storage.json")
         ]
 
@@ -246,6 +262,51 @@ public final class ActiveWorkspaceMonitor {
         return storageFiles
     }
 
+    nonisolated public static func detectLatestXcodeDerivedDataWorkspaceEntry(
+        home: URL = PathConstants.effectiveHomeDirectory
+    ) -> (path: String, modified: Date)? {
+        let fm = FileManager.default
+        let derivedDataRoot = home.appendingPathComponent("Library/Developer/Xcode/DerivedData", isDirectory: true)
+        guard let subdirs = try? fm.contentsOfDirectory(
+            at: derivedDataRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        var candidates: [(path: String, modified: Date)] = []
+        for dir in subdirs {
+            let plistURL = dir.appendingPathComponent("info.plist")
+            guard fm.fileExists(atPath: plistURL.path),
+                  let attrs = try? fm.attributesOfItem(atPath: plistURL.path),
+                  let modDate = attrs[.modificationDate] as? Date,
+                  let data = try? Data(contentsOf: plistURL),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                  let rawWorkspacePath = plist["WorkspacePath"] as? String,
+                  !rawWorkspacePath.isEmpty else {
+                continue
+            }
+
+            var resolvedURL = URL(fileURLWithPath: rawWorkspacePath)
+            let ext = resolvedURL.pathExtension.lowercased()
+            if ext == "xcodeproj" || ext == "xcworkspace" {
+                resolvedURL = resolvedURL.deletingLastPathComponent()
+            }
+            if fm.fileExists(atPath: resolvedURL.path) {
+                candidates.append((resolvedURL.path, modDate))
+            }
+        }
+
+        return candidates.max(by: { $0.modified < $1.modified })
+    }
+
+    nonisolated public static func detectLatestXcodeDerivedDataWorkspace(
+        home: URL = PathConstants.effectiveHomeDirectory
+    ) -> String? {
+        detectLatestXcodeDerivedDataWorkspaceEntry(home: home)?.path
+    }
+
     nonisolated public static func detectMostRecentWorkspaceOnDisk() -> (path: String, source: String)? {
         let fm = FileManager.default
         let home = PathConstants.effectiveHomeDirectory
@@ -276,6 +337,11 @@ public final class ActiveWorkspaceMonitor {
                 continue
             }
             candidates.append((folderPath, modDate, "ide-focus"))
+        }
+
+        // 3. Check latest Xcode DerivedData info.plist workspace
+        if let xcodeEntry = detectLatestXcodeDerivedDataWorkspaceEntry(home: home) {
+            candidates.append((xcodeEntry.path, xcodeEntry.modified, "xcode"))
         }
 
         guard let newest = candidates.max(by: { $0.modified < $1.modified }) else {

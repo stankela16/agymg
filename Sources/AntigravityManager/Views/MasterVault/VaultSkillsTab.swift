@@ -6,7 +6,6 @@ public struct VaultSkillsTab: View {
     @Binding var editingSkill: SkillDefinition?
     @State private var searchText: String = ""
     @State private var selectedCategory: String = "All"
-    @State private var showingNewSkillSheet: Bool = false
 
     public init(state: AppState, deletionTarget: Binding<DeletionTarget?>, editingSkill: Binding<SkillDefinition?>) {
         self.state = state
@@ -50,36 +49,16 @@ public struct VaultSkillsTab: View {
                 skillsGridView
             }
         }
-        .sheet(isPresented: $showingNewSkillSheet) {
-            NewSkillSheet(state: state) { created in
-                editingSkill = created
-            }
-        }
     }
 
     private var filterBar: some View {
-        HStack(spacing: DesignTokens.Spacing.sm) {
-            FilterChipsView(
-                categories: skillCategories,
-                counts: categoryCounts,
-                selectedCategory: $selectedCategory,
-                searchText: $searchText,
-                placeholder: "Filter vault skills..."
-            )
-            Spacer()
-            Button {
-                showingNewSkillSheet = true
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus")
-                    Text("New Skill")
-                }
-                .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(DesignTokens.primaryContainer)
-            .help("Create a new skill in Master Vault")
-        }
+        FilterChipsView(
+            categories: skillCategories,
+            counts: categoryCounts,
+            selectedCategory: $selectedCategory,
+            searchText: $searchText,
+            placeholder: "Filter vault skills..."
+        )
         .padding(.vertical, DesignTokens.Spacing.xxs)
     }
 
@@ -138,7 +117,7 @@ public struct VaultSkillsTab: View {
                     Button { editingSkill = skill } label: { Image(systemName: "pencil.line") }
                         .buttonStyle(.borderless).help("View and edit SKILL.md")
                     Button(role: .destructive) { deletionTarget = .skill(skill) } label: {
-                        Image(systemName: "trash").foregroundStyle(Color(hex: 0xF5222D))
+                        Image(systemName: "trash").foregroundStyle(DesignTokens.Colors.statusError)
                     }
                     .buttonStyle(.borderless).help("Uninstall skill from disk")
                 }

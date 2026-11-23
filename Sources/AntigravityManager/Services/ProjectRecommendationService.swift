@@ -22,6 +22,14 @@ public struct ProjectStackInspection: Sendable {
     public var hasGCloudMarker: Bool = false
     public var hasDigitalOceanMarker: Bool = false
     public var hasAuthOrDatabaseMarker: Bool = false
+    public var hasCloudflareMarker: Bool = false
+    public var hasGeminiAPIMarker: Bool = false
+    public var hasESP32Marker: Bool = false
+    public var hasFigmaMarker: Bool = false
+    public var hasPythonMarker: Bool = false
+    public var pythonDependencies: Set<String> = []
+    public var hasGoMarker: Bool = false
+    public var hasRustMarker: Bool = false
     public var stackLabels: [String] = []
 
     public init() {}
@@ -180,13 +188,19 @@ public struct ProjectRecommendationService: Sendable {
         }
         let candidateSubDirs = firstLevelDirs + secondLevelDirs
 
+        func appendLabel(_ label: String) {
+            if !info.stackLabels.contains(label) {
+                info.stackLabels.append(label)
+            }
+        }
+
         if info.hasSwiftPackage || info.hasXcodeProject {
             if info.isMacOSTarget {
-                info.stackLabels.append("Swift / macOS")
+                appendLabel("Swift / macOS")
             } else if info.isIOSTarget {
-                info.stackLabels.append("Xcode / iOS")
+                appendLabel("Xcode / iOS")
             } else {
-                info.stackLabels.append("Swift / Apple")
+                appendLabel("Swift / Apple")
             }
         }
 
@@ -214,24 +228,57 @@ public struct ProjectRecommendationService: Sendable {
         }
         info.npmDependencies = allDeps
 
+        // 2b. Collect Python markers & dependencies (requirements.txt, pyproject.toml, Pipfile, uv.lock)
+        let candidateRoots = [rootURL] + firstLevelDirs
+        var pyDeps: Set<String> = []
+        let pythonFileMarkers = ["pyproject.toml", "requirements.txt", "Pipfile", "uv.lock"]
+        for dirURL in candidateRoots {
+            for marker in pythonFileMarkers {
+                let markerURL = dirURL.appendingPathComponent(marker)
+                if fm.fileExists(atPath: markerURL.path) {
+                    info.hasPythonMarker = true
+                    if marker == "requirements.txt", let text = try? String(contentsOf: markerURL, encoding: .utf8) {
+                        Self.extractRequirementsPackages(from: text, into: &pyDeps)
+                    } else if marker == "pyproject.toml", let text = try? String(contentsOf: markerURL, encoding: .utf8) {
+                        Self.extractPyprojectPackages(from: text, into: &pyDeps)
+                    }
+                }
+            }
+        }
+        info.pythonDependencies = pyDeps
+        if info.hasPythonMarker {
+            appendLabel("Python")
+        }
+
+        // 2c. Go & Rust markers
+        if candidateRoots.contains(where: { fm.fileExists(atPath: $0.appendingPathComponent("go.mod").path) }) {
+            info.hasGoMarker = true
+            appendLabel("Go")
+        }
+        if candidateRoots.contains(where: { fm.fileExists(atPath: $0.appendingPathComponent("Cargo.toml").path) }) {
+            info.hasRustMarker = true
+            appendLabel("Rust")
+        }
+
         // 3. Evaluate dependency & file markers
         if topNames.contains("supabase")
             || firstLevelDirs.contains(where: { fm.fileExists(atPath: $0.appendingPathComponent("supabase").path) })
-            || allDeps.contains(where: { $0.hasPrefix("@supabase/") || $0 == "supabase" }) {
+            || allDeps.contains(where: { $0.hasPrefix("@supabase/") || $0 == "supabase" })
+            || pyDeps.contains("supabase") {
             info.hasSupabaseMarker = true
             info.hasAuthOrDatabaseMarker = true
-            info.stackLabels.append("Supabase")
+            appendLabel("Supabase")
         }
 
-        if allDeps.contains(where: { $0.contains("posthog") }) {
+        if allDeps.contains(where: { $0.contains("posthog") }) || pyDeps.contains("posthog") {
             info.hasPostHogMarker = true
-            info.stackLabels.append("PostHog")
+            appendLabel("PostHog")
         }
 
         if allDeps.contains(where: { $0.hasPrefix("@polar-sh/") || $0 == "polar" }) {
             info.hasPolarMarker = true
             info.hasAuthOrDatabaseMarker = true
-            info.stackLabels.append("Polar.sh")
+            appendLabel("Polar.sh")
         }
 
         if topNames.contains("components.json")
@@ -252,18 +299,49 @@ public struct ProjectRecommendationService: Sendable {
             || topNames.contains("index.html") {
             info.hasWebFrontendMarker = true
             if allDeps.contains("next") {
-                info.stackLabels.append("Next.js")
+                appendLabel("Next.js")
             } else if allDeps.contains("react") {
-                info.stackLabels.append("React")
+                appendLabel("React")
             } else {
-                info.stackLabels.append("Web")
+                appendLabel("Web")
             }
         }
 
         if allDeps.contains(where: { $0 == "remotion" || $0.hasPrefix("@remotion/") })
             || topNames.contains(where: { $0.hasPrefix("remotion.config.") }) {
             info.hasRemotionMarker = true
-            info.stackLabels.append("Remotion Video")
+            appendLabel("Remotion Video")
+        }
+
+        let cloudflareFiles = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"]
+        if candidateRoots.contains(where: { dir in cloudflareFiles.contains(where: { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }) })
+            || allDeps.contains(where: { $0.hasPrefix("@cloudflare/") || $0 == "wrangler" }) {
+            info.hasCloudflareMarker = true
+            appendLabel("Cloudflare")
+        }
+
+        if allDeps.contains(where: { $0 == "@google/genai" || $0 == "@google/generative-ai" })
+            || pyDeps.contains("google-genai")
+            || pyDeps.contains("google-generativeai") {
+            info.hasGeminiAPIMarker = true
+            appendLabel("Gemini API")
+        }
+
+        let hasInoRoot = topNames.contains(where: { $0.lowercased().hasSuffix(".ino") })
+        if hasInoRoot
+            || candidateRoots.contains(where: {
+                fm.fileExists(atPath: $0.appendingPathComponent("platformio.ini").path)
+                || fm.fileExists(atPath: $0.appendingPathComponent("sdkconfig").path)
+            }) {
+            info.hasESP32Marker = true
+            appendLabel("ESP32 / Embedded")
+        }
+
+        if topNames.contains("figma.config.json")
+            || topNames.contains(".figmarc")
+            || allDeps.contains(where: { $0.hasPrefix("@figma/") }) {
+            info.hasFigmaMarker = true
+            appendLabel("Figma")
         }
 
         if topNames.contains("vercel.json")
@@ -279,17 +357,20 @@ public struct ProjectRecommendationService: Sendable {
         }
 
         if allDeps.contains(where: { $0 == "telegraf" || $0 == "grammy" || $0.contains("telegram") })
+            || pyDeps.contains(where: { $0 == "python-telegram-bot" || $0 == "aiogram" || $0 == "pytelegrambotapi" || $0 == "telethon" })
             || topNames.contains(where: { $0.lowercased().contains("telegram") })
             || fm.fileExists(atPath: rootURL.appendingPathComponent("Scripts/telegram_hook.sh").path) {
             info.hasTelegramMarker = true
-            info.stackLabels.append("Telegram Bot")
+            appendLabel("Telegram Bot")
         }
 
         if allDeps.contains(where: { $0.contains("brevo") || $0 == "sib-api-v3-sdk" }) {
             info.hasBrevoMarker = true
         }
 
-        if allDeps.contains(where: { $0.hasPrefix("@aws-sdk/") || $0 == "aws-sdk" }) {
+        if allDeps.contains(where: { $0.hasPrefix("@aws-sdk/") || $0 == "aws-sdk" })
+            || pyDeps.contains("boto3")
+            || pyDeps.contains("botocore") {
             info.hasAWSMarker = true
         }
 
@@ -312,11 +393,40 @@ public struct ProjectRecommendationService: Sendable {
         if allDeps.contains(where: {
             $0.contains("prisma") || $0.contains("drizzle") || $0.contains("next-auth")
             || $0.contains("better-auth") || $0.contains("clerk") || $0.contains("stripe")
+        }) || pyDeps.contains(where: {
+            $0 == "fastapi" || $0 == "django" || $0 == "flask" || $0 == "prisma" || $0 == "sqlalchemy" || $0 == "stripe"
         }) {
             info.hasAuthOrDatabaseMarker = true
         }
 
         return info
+    }
+
+    private static func extractRequirementsPackages(from text: String, into set: inout Set<String>) {
+        let separators = CharacterSet(charactersIn: "=<>!~;[ \t\"")
+        for rawLine in text.components(separatedBy: .newlines) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("-") { continue }
+            let token = trimmed.components(separatedBy: separators).first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            if !token.isEmpty {
+                set.insert(token.replacingOccurrences(of: "_", with: "-"))
+            }
+        }
+    }
+
+    private static func extractPyprojectPackages(from text: String, into set: inout Set<String>) {
+        let lower = text.lowercased()
+        let knownPackages = [
+            "supabase", "google-genai", "google-generativeai", "posthog",
+            "python-telegram-bot", "aiogram", "pytelegrambotapi", "telethon",
+            "boto3", "botocore", "fastapi", "django", "flask", "prisma", "sqlalchemy", "stripe"
+        ]
+        let normalized = lower.replacingOccurrences(of: "_", with: "-")
+        for pkg in knownPackages {
+            if normalized.contains("\"\(pkg)") || normalized.contains("'\(pkg)") || normalized.contains(" \(pkg)") || normalized.contains("\n\(pkg)") {
+                set.insert(pkg)
+            }
+        }
     }
 
     public func recommend(
@@ -327,7 +437,8 @@ public struct ProjectRecommendationService: Sendable {
         globalSkillIds: Set<String>,
         projectLocalSkillIds: Set<String> = [],
         availablePlugins: [PluginDefinition],
-        globalPluginIds: Set<String>
+        globalPluginIds: Set<String>,
+        includeDismissed: Bool = false
     ) -> [ResourceRecommendation] {
         let stack = inspectStack(at: project.path)
         return buildRecommendations(
@@ -339,7 +450,8 @@ public struct ProjectRecommendationService: Sendable {
             globalSkillIds: globalSkillIds,
             projectLocalSkillIds: projectLocalSkillIds,
             availablePlugins: availablePlugins,
-            globalPluginIds: globalPluginIds
+            globalPluginIds: globalPluginIds,
+            includeDismissed: includeDismissed
         )
     }
 
@@ -352,7 +464,8 @@ public struct ProjectRecommendationService: Sendable {
         globalSkillIds: Set<String>,
         projectLocalSkillIds: Set<String> = [],
         availablePlugins: [PluginDefinition],
-        globalPluginIds: Set<String>
+        globalPluginIds: Set<String>,
+        includeDismissed: Bool = false
     ) -> [ResourceRecommendation] {
         let serverMap = Dictionary(uniqueKeysWithValues: availableServers.map { ($0.id, $0) })
         let skillMap = Dictionary(uniqueKeysWithValues: availableSkills.map { ($0.id, $0) })
@@ -385,9 +498,12 @@ public struct ProjectRecommendationService: Sendable {
         var recommendations: [ResourceRecommendation] = []
         var seenKeys: Set<String> = []
 
+        let dismissedKeys = includeDismissed ? [] : project.dismissedRecommendationKeys
+
         func addMCP(_ id: String, reason: String, priority: RecommendationPriority = .high) {
             guard !allActiveServerIds.contains(id), let server = serverMap[id] else { return }
             let rec = ResourceRecommendation(id: server.id, name: server.name, kind: .mcp, reason: reason, priority: priority)
+            guard !dismissedKeys.contains(rec.uniqueKey) else { return }
             if seenKeys.insert(rec.uniqueKey).inserted {
                 recommendations.append(rec)
             }
@@ -396,6 +512,7 @@ public struct ProjectRecommendationService: Sendable {
         func addSkill(_ id: String, reason: String, priority: RecommendationPriority = .medium) {
             guard !activeSkillIds.contains(id), let skill = skillMap[id] else { return }
             let rec = ResourceRecommendation(id: skill.id, name: skill.name, kind: .skill, reason: reason, priority: priority)
+            guard !dismissedKeys.contains(rec.uniqueKey) else { return }
             if seenKeys.insert(rec.uniqueKey).inserted {
                 recommendations.append(rec)
             }
@@ -404,6 +521,7 @@ public struct ProjectRecommendationService: Sendable {
         func addPlugin(_ id: String, reason: String, priority: RecommendationPriority = .high) {
             guard !activePluginIds.contains(id), let plugin = pluginMap[id] else { return }
             let rec = ResourceRecommendation(id: plugin.id, name: plugin.name, kind: .plugin, reason: reason, priority: priority)
+            guard !dismissedKeys.contains(rec.uniqueKey) else { return }
             if seenKeys.insert(rec.uniqueKey).inserted {
                 recommendations.append(rec)
             }
@@ -430,6 +548,10 @@ public struct ProjectRecommendationService: Sendable {
                 }
                 addSkill(skill.id, reason: "\(stackDesc) (Apple/Swift skill available in Vault)", priority: .medium)
             }
+
+            if stack.isIOSTarget {
+                addSkill("apple-onboarding-cro", reason: "Detected iOS project — App Store & onboarding optimization", priority: .medium)
+            }
         }
 
         // 2. Supabase
@@ -439,7 +561,7 @@ public struct ProjectRecommendationService: Sendable {
 
         // 3. PostHog
         if stack.hasPostHogMarker {
-            addMCP("posthog", reason: "Detected PostHog analytics in package.json", priority: .high)
+            addMCP("posthog", reason: "Detected PostHog analytics in project", priority: .high)
         }
 
         // 4. Polar
@@ -479,13 +601,37 @@ public struct ProjectRecommendationService: Sendable {
             addMCP("netlify", reason: "Detected Netlify configuration in project", priority: .high)
         }
 
-        // 8. Telegram
+        // 8. Cloudflare / Gemini API / ESP32 / Figma
+        if stack.hasCloudflareMarker {
+            addPlugin("cloudflare", reason: "Detected Cloudflare Workers / Wrangler configuration", priority: .high)
+            if serverMap["cloudflare"] != nil {
+                addMCP("cloudflare", reason: "Detected Cloudflare project", priority: .high)
+            } else {
+                addMCP("cloudflare_cloudflare", reason: "Detected Cloudflare project", priority: .high)
+            }
+        }
+        if stack.hasGeminiAPIMarker {
+            addPlugin("gemini-api", reason: "Detected Google Gemini SDK in project dependencies", priority: .high)
+        }
+        if stack.hasESP32Marker {
+            addSkill("esp32-desk-gadget", reason: "Detected ESP32 / PlatformIO embedded firmware project", priority: .high)
+        }
+        if stack.hasFigmaMarker {
+            addPlugin("figma", reason: "Detected Figma integration in project", priority: .medium)
+            if serverMap["figma"] != nil {
+                addMCP("figma", reason: "Detected Figma configuration in project", priority: .medium)
+            } else {
+                addMCP("figma_figma", reason: "Detected Figma configuration in project", priority: .medium)
+            }
+        }
+
+        // 9. Telegram
         if stack.hasTelegramMarker {
             addMCP("telegram", reason: "Detected Telegram integration in project", priority: .high)
             addSkill("telegram-bot-builder", reason: "Detected Telegram bot script or dependency", priority: .high)
         }
 
-        // 9. Brevo / AWS
+        // 10. Brevo / AWS
         if stack.hasBrevoMarker {
             addMCP("brevo", reason: "Detected Brevo email SDK in package.json", priority: .high)
         }
@@ -493,7 +639,7 @@ public struct ProjectRecommendationService: Sendable {
             addSkill("aws-ops", reason: "Detected AWS SDK in project", priority: .high)
         }
 
-        // 10. DevOps / Docker / Cloud
+        // 11. DevOps / Docker / Cloud
         if stack.hasDockerOrVPSMarker {
             addSkill("hetzner-vps-ops", reason: "Detected Dockerfile / deployment configuration", priority: .medium)
         }
@@ -504,9 +650,38 @@ public struct ProjectRecommendationService: Sendable {
             addMCP("digitalocean", reason: "Detected DigitalOcean configuration", priority: .high)
         }
 
-        // 11. Security review for auth/payment/db projects
+        // 12. Security review for auth/payment/db projects
         if stack.hasAuthOrDatabaseMarker {
             addSkill("security-review", reason: "Recommended for projects with databases, auth, or billing", priority: .low)
+        }
+
+        // 13. Dynamic YAML frontmatter matching for new Vault skills (capped at 4 low-priority matches)
+        let stackTokens = Self.detectedTechnologyTokens(from: stack)
+        if !stackTokens.isEmpty {
+            let metaSkillIds: Set<String> = [
+                "ask", "vault", "handoff", "grill-plan", "boost-mode",
+                "skill-creator", "consult-claude", "consult-antigravity",
+                "logo-design", "automation", "plugin", "run-workflow"
+            ]
+            var dynamicCount = 0
+            let sortedVaultSkills = availableSkills.sorted { $0.id < $1.id }
+            for skill in sortedVaultSkills {
+                guard dynamicCount < 4 else { break }
+                let lowerId = skill.id.lowercased()
+                if metaSkillIds.contains(lowerId) { continue }
+                if stack.isIOSTarget && !stack.isMacOSTarget && (lowerId.contains("macos") || lowerId.contains("appkit")) {
+                    continue
+                }
+                let dummyKey = "skill:\(skill.id)"
+                if activeSkillIds.contains(skill.id) || seenKeys.contains(dummyKey) || dismissedKeys.contains(dummyKey) {
+                    continue
+                }
+                let skillWords = Self.tokenize("\(skill.id) \(skill.name) \(skill.description)")
+                if let matched = stackTokens.sorted().first(where: { skillWords.contains($0) }) {
+                    addSkill(skill.id, reason: "Matches detected \(matched) in repository (Vault skill)", priority: .low)
+                    dynamicCount += 1
+                }
+            }
         }
 
         return recommendations.sorted { lhs, rhs in
@@ -518,5 +693,59 @@ public struct ProjectRecommendationService: Sendable {
             }
             return lhs.id < rhs.id
         }
+    }
+
+    private static func detectedTechnologyTokens(from stack: ProjectStackInspection) -> Set<String> {
+        var tokens: Set<String> = []
+        if stack.hasCloudflareMarker { tokens.formUnion(["cloudflare", "wrangler"]) }
+        if stack.hasGeminiAPIMarker { tokens.insert("gemini") }
+        if stack.hasESP32Marker { tokens.formUnion(["esp32", "platformio"]) }
+        if stack.hasFigmaMarker { tokens.insert("figma") }
+        if stack.hasPythonMarker {
+            tokens.insert("python")
+            if stack.pythonDependencies.contains("fastapi") { tokens.insert("fastapi") }
+            if stack.pythonDependencies.contains("django") { tokens.insert("django") }
+        }
+        if stack.hasGoMarker { tokens.insert("golang") }
+        if stack.hasRustMarker { tokens.insert("rust") }
+        if stack.hasSwiftPackage || stack.hasXcodeProject {
+            tokens.formUnion(["swift", "swiftui"])
+            if stack.isMacOSTarget { tokens.insert("macos") }
+            if stack.isIOSTarget { tokens.insert("ios") }
+        }
+        if stack.hasWebFrontendMarker {
+            if stack.npmDependencies.contains("next") { tokens.insert("nextjs") }
+            if stack.npmDependencies.contains("react") { tokens.insert("react") }
+            if stack.npmDependencies.contains("tailwindcss") { tokens.insert("tailwind") }
+            if stack.npmDependencies.contains("astro") { tokens.insert("astro") }
+            if stack.npmDependencies.contains("svelte") || stack.npmDependencies.contains("@sveltejs/kit") { tokens.insert("svelte") }
+            if stack.npmDependencies.contains("vue") { tokens.insert("vue") }
+            if stack.npmDependencies.contains("nuxt") { tokens.insert("nuxt") }
+        }
+        if stack.hasSupabaseMarker { tokens.insert("supabase") }
+        if stack.hasRemotionMarker { tokens.insert("remotion") }
+        if stack.hasTelegramMarker { tokens.insert("telegram") }
+        if stack.hasDockerOrVPSMarker { tokens.insert("docker") }
+        if stack.hasVercelMarker { tokens.insert("vercel") }
+        if stack.hasNetlifyMarker { tokens.insert("netlify") }
+        if stack.hasPostHogMarker { tokens.insert("posthog") }
+        if stack.hasPolarMarker { tokens.insert("polar") }
+        if stack.hasShadcnMarker { tokens.insert("shadcn") }
+        if stack.npmDependencies.contains(where: { $0.contains("prisma") }) || stack.pythonDependencies.contains("prisma") {
+            tokens.insert("prisma")
+        }
+        if stack.npmDependencies.contains(where: { $0.contains("drizzle") }) {
+            tokens.insert("drizzle")
+        }
+        if stack.npmDependencies.contains(where: { $0.contains("stripe") }) || stack.pythonDependencies.contains("stripe") {
+            tokens.insert("stripe")
+        }
+        return tokens
+    }
+
+    private static func tokenize(_ text: String) -> Set<String> {
+        let lower = text.lowercased()
+        let parts = lower.components(separatedBy: CharacterSet.alphanumerics.inverted)
+        return Set(parts.filter { $0.count >= 2 })
     }
 }

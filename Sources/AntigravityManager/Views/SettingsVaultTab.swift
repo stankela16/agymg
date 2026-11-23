@@ -22,12 +22,12 @@ public struct SettingsVaultTab: View {
 
                         if state.isProjectsFolderAuthorized {
                             HStack(spacing: 4) {
-                                Circle().fill(Color.green).frame(width: 6, height: 6)
-                                Text("Connected").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.green)
+                                Circle().fill(DesignTokens.Colors.statusSuccess).frame(width: 6, height: 6)
+                                Text("Connected").font(.system(size: 11, weight: .medium)).foregroundStyle(DesignTokens.Colors.statusSuccess)
                             }
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.12))
+                            .background(DesignTokens.Colors.statusSuccessBg)
                             .clipShape(Capsule())
                         } else {
                             HStack(spacing: 4) {

@@ -7,7 +7,6 @@ public struct VaultServersTab: View {
     @State private var searchText: String = ""
     @State private var selectedCategory: String = "All"
     @State private var serverToEdit: MCPServerDefinition? = nil
-    @State private var showingAddServer: Bool = false
 
     public init(state: AppState, deletionTarget: Binding<DeletionTarget?>) {
         self.state = state
@@ -53,34 +52,16 @@ public struct VaultServersTab: View {
         .sheet(item: $serverToEdit) { server in
             EditMCPServerSheet(state: state, server: server)
         }
-        .sheet(isPresented: $showingAddServer) {
-            EditMCPServerSheet(state: state)
-        }
     }
 
     private var filterBarSection: some View {
-        HStack(spacing: DesignTokens.Spacing.sm) {
-            FilterChipsView(
-                categories: serverCategories,
-                counts: categoryCounts,
-                selectedCategory: $selectedCategory,
-                searchText: $searchText,
-                placeholder: "Filter vault servers..."
-            )
-            Spacer()
-            Button {
-                showingAddServer = true
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus")
-                    Text("Add Server")
-                }
-                .font(.system(size: 11, weight: .semibold))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(DesignTokens.primaryContainer)
-            .help("Add a new MCP server to Master Vault")
-        }
+        FilterChipsView(
+            categories: serverCategories,
+            counts: categoryCounts,
+            selectedCategory: $selectedCategory,
+            searchText: $searchText,
+            placeholder: "Filter vault servers..."
+        )
         .padding(.vertical, DesignTokens.Spacing.xxs)
     }
 
@@ -134,6 +115,11 @@ public struct VaultServersTab: View {
                     ResourcePillBadge.catalogOnly
                         .help("Stored in Master Vault catalog, currently inactive globally and per-project")
                 }
+                if let health = state.mcpHealthByServerId[server.id],
+                   health.state == .error || health.state == .warning {
+                    ResourcePillBadge.health(health)
+                        .help("\(health.summary): \(health.detail)")
+                }
             },
             actions: {
                 HStack(spacing: DesignTokens.Spacing.sm) {
@@ -162,7 +148,7 @@ public struct VaultServersTab: View {
                         deletionTarget = .server(server)
                     } label: {
                         Image(systemName: "trash")
-                            .foregroundStyle(Color(hex: 0xF5222D))
+                            .foregroundStyle(DesignTokens.Colors.statusError)
                     }
                     .buttonStyle(.borderless)
                     .help("Uninstall MCP server from Mac")

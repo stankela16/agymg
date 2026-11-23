@@ -88,6 +88,8 @@ public enum CLIRunner {
     public static let supportedSubcommands: Set<String> = [
         "brief",
         "set",
+        "doctor",
+        "import-skill",
         "hook-session-start",
         "install-app",
         "uninstall",
@@ -198,6 +200,16 @@ public enum CLIRunner {
                 args: Array(args.dropFirst()),
                 currentDirectoryPath: currentDirectoryPath ?? FileManager.default.currentDirectoryPath
             )
+        case "doctor":
+            return await handleDoctor(
+                args: Array(args.dropFirst()),
+                currentDirectoryPath: currentDirectoryPath ?? FileManager.default.currentDirectoryPath
+            )
+        case "import-skill":
+            return await handleImportSkill(
+                args: Array(args.dropFirst()),
+                currentDirectoryPath: currentDirectoryPath ?? FileManager.default.currentDirectoryPath
+            )
         case "hook-session-start":
             return await handleHookSessionStart(
                 args: Array(args.dropFirst()),
@@ -252,6 +264,162 @@ public enum CLIRunner {
         }
 
         return CLIExecutionResult(exitCode: 0, stdout: formatBriefMarkdown(snapshot))
+    }
+
+    // MARK: - Subcommand: doctor
+    private static func handleDoctor(args: [String], currentDirectoryPath: String) async -> CLIExecutionResult {
+        var requestedPath: String? = nil
+        var outputJSON = false
+
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            if arg == "--json" {
+                outputJSON = true
+            } else if arg == "--project", i + 1 < args.count {
+                requestedPath = args[i + 1]
+                i += 1
+            } else if arg.hasPrefix("--project=") {
+                requestedPath = String(arg.dropFirst("--project=".count))
+            }
+            i += 1
+        }
+
+        let vault = VaultService()
+        let servers = await vault.loadServersReadOnly()
+        let globalSelection = await vault.loadGlobalSelection()
+        let skills = SkillScannerService().scanVaultSkills(readOnly: true)
+        var projects = await vault.loadSavedProjectsWithoutTCC(allowingCWD: requestedPath)
+
+        if let requestedPath {
+            let resolvedPath = resolveCLIPath(requestedPath, relativeTo: currentDirectoryPath)
+            let (targetProj, _) = resolveOrCreateProject(for: resolvedPath, in: projects)
+            projects = [targetProj]
+        }
+
+        let report = MCPDiagnosticsService().runDoctor(
+            servers: servers,
+            globalServerIds: globalSelection.enabledMCPServerIds,
+            skills: skills,
+            globalSkillIds: globalSelection.enabledSkillIds,
+            projects: projects
+        )
+
+        if outputJSON {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(report),
+               let jsonString = String(data: data, encoding: .utf8) {
+                return CLIExecutionResult(exitCode: 0, stdout: jsonString)
+            }
+            return CLIExecutionResult(exitCode: 1, stderr: "Failed to encode doctor JSON")
+        }
+
+        var lines: [String] = []
+        lines.append("# agymg Doctor — Status: \(report.status.uppercased()) (\(report.errorCount) errors, \(report.warningCount) warnings)")
+        lines.append("")
+        lines.append("## MCP Server Health (\(report.serverHealth.count))")
+        if report.serverHealth.isEmpty {
+            lines.append("- No MCP servers registered in Master Vault.")
+        } else {
+            for item in report.serverHealth {
+                lines.append("- [\(item.state.rawValue.uppercased())] `\(item.serverId)`: \(item.summary) — \(item.detail)")
+            }
+        }
+        lines.append("")
+        lines.append("## Config Drift (\(report.driftIssues.count))")
+        if report.driftIssues.isEmpty {
+            lines.append("- No config drift detected between Master Vault, Antigravity, and Claude Code.")
+        } else {
+            for drift in report.driftIssues {
+                lines.append("- [\(drift.severity.rawValue.uppercased())] (\(drift.scope)) \(drift.target): \(drift.detail)")
+            }
+        }
+        if !report.projectAudits.isEmpty {
+            lines.append("")
+            lines.append("## Workspace Safety Audits (\(report.projectAudits.count))")
+            for audit in report.projectAudits {
+                let warnSuffix = audit.warnings.isEmpty ? "" : " — \(audit.warnings.joined(separator: "; "))"
+                lines.append("- [\(audit.status)] `\(audit.projectName)`\(warnSuffix)")
+            }
+        }
+        return CLIExecutionResult(exitCode: 0, stdout: lines.joined(separator: "\n"))
+    }
+
+    // MARK: - Subcommand: import-skill
+    private static func handleImportSkill(args: [String], currentDirectoryPath: String) async -> CLIExecutionResult {
+        var sourceInput: String? = nil
+        var customId: String? = nil
+        var overwrite = false
+        var outputJSON = false
+
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            if arg == "--overwrite" {
+                overwrite = true
+            } else if arg == "--json" {
+                outputJSON = true
+            } else if arg == "--id", i + 1 < args.count {
+                customId = args[i + 1]
+                i += 1
+            } else if arg.hasPrefix("--id=") {
+                customId = String(arg.dropFirst("--id=".count))
+            } else if !arg.hasPrefix("-"), sourceInput == nil {
+                sourceInput = arg
+            }
+            i += 1
+        }
+
+        guard let sourceInput, !sourceInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return CLIExecutionResult(
+                exitCode: 1,
+                stderr: "Usage: agymg import-skill <path-or-github-url> [--id <skill-id>] [--overwrite] [--json]"
+            )
+        }
+
+        let vault = VaultService()
+        await vault.initializeVaultIfNeeded()
+        let importer = SkillImportService()
+        let trimmedSource = sourceInput.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            let skill: SkillDefinition
+            if trimmedSource.lowercased().hasPrefix("http://") || trimmedSource.lowercased().hasPrefix("https://") {
+                skill = try await importer.importFromGitHubURL(trimmedSource, customId: customId, overwrite: overwrite)
+            } else {
+                let resolvedPath = resolveCLIPath(trimmedSource, relativeTo: currentDirectoryPath)
+                skill = try importer.importFromLocalFolder(
+                    sourceURL: URL(fileURLWithPath: resolvedPath, isDirectory: true),
+                    customId: customId,
+                    overwrite: overwrite
+                )
+            }
+
+            notifyMenuBarApp(
+                projectPath: currentDirectoryPath,
+                projectId: nil,
+                projectName: nil,
+                source: "cli-import-skill",
+                didMutateVault: true
+            )
+
+            if outputJSON {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                if let data = try? encoder.encode(skill),
+                   let str = String(data: data, encoding: .utf8) {
+                    return CLIExecutionResult(exitCode: 0, stdout: str)
+                }
+            }
+            return CLIExecutionResult(
+                exitCode: 0,
+                stdout: "Imported skill '\(skill.id)' (\(skill.name)) into Master Vault at \(skill.path)"
+            )
+        } catch {
+            return CLIExecutionResult(exitCode: 1, stderr: "Skill import failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Subcommand: set
@@ -1312,6 +1480,8 @@ public enum CLIRunner {
     USAGE:
       agymg brief [--project <path>] [--json]
       agymg set [--project <path> | --global] [options] [--json]
+      agymg doctor [--project <path>] [--json]
+      agymg import-skill <path-or-github-url> [--id <skill-id>] [--overwrite] [--json]
       agymg hook-session-start [--format antigravity|claude-text] [--project <path>]
       agymg install-app [--dest <dir>] [--source <path>]
       agymg uninstall --restore [--purge-vault] [--json]

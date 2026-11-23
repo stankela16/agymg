@@ -117,6 +117,11 @@ public struct GlobalCoreMCPTab: View {
             iconGradient: DesignTokens.Gradients.forCategory(server.category),
             badges: {
                 if isActive { ResourcePillBadge.global }
+                if let health = state.mcpHealthByServerId[server.id],
+                   health.state == .error || health.state == .warning {
+                    ResourcePillBadge.health(health)
+                        .help("\(health.summary): \(health.detail)")
+                }
             },
             actions: {
                 Toggle("", isOn: Binding(
