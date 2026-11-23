@@ -155,27 +155,6 @@ public struct ControlCenterView: View {
 
     @ToolbarContentBuilder
     private var syncToolbarItem: some ToolbarContent {
-        ToolbarItem(placement: .status) {
-            if state.isSyncing {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    ProgressView().controlSize(.small)
-                    Text("Synchronizing...").font(.caption).foregroundStyle(DesignTokens.inkSecondary)
-                }
-            } else if let lastSync = state.lastSyncDate {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Circle().fill(DesignTokens.secondary).frame(width: 6, height: 6)
-                    Text("Synced (\(lastSync.formatted(date: .omitted, time: .standard)))")
-                        .font(.caption).foregroundStyle(DesignTokens.inkSecondary)
-                }
-            } else {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Circle().fill(DesignTokens.secondary).frame(width: 6, height: 6)
-                    Text("Master Vault Ready")
-                        .font(.caption).foregroundStyle(DesignTokens.inkSecondary)
-                }
-            }
-        }
-
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: PathConstants.vaultDirectory.path)
