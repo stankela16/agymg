@@ -7,15 +7,34 @@ public enum CopySetupMode: String, Sendable {
     case replace
 }
 
+public enum PopoverUndoAction: Equatable, Sendable {
+    case reenableGlobalServer(id: String)
+    case reenableGlobalSkill(id: String)
+    case reenableGlobalPlugin(id: String)
+}
+
+public enum ManagedResourceKind: String, Codable, Hashable, Sendable, CaseIterable {
+    case mcp
+    case skill
+    case plugin
+}
+
 public struct PopoverFeedback: Equatable, Sendable {
     public let message: String
     public let detail: String
     public let requiresChatReload: Bool
+    public let undoAction: PopoverUndoAction?
 
-    public init(message: String, detail: String, requiresChatReload: Bool = false) {
+    public init(
+        message: String,
+        detail: String,
+        requiresChatReload: Bool = false,
+        undoAction: PopoverUndoAction? = nil
+    ) {
         self.message = message
         self.detail = detail
         self.requiresChatReload = requiresChatReload
+        self.undoAction = undoAction
     }
 }
 
@@ -73,6 +92,8 @@ public final class AppState {
     public var syncHistory: [SyncLogEntry] = []
     public var isProjectsFolderAuthorized: Bool = ProjectFolderAccessManager.shared.isAuthorized
     public var isAuthorizingFolder: Bool = false
+    public var contextUsage: ContextUsageSnapshot = .empty
+    public var isRefreshingContextUsage: Bool = false
 
     let vaultService = VaultService()
     let syncEngine = SyncEngine()
@@ -83,11 +104,13 @@ public final class AppState {
     let recommendationService = ProjectRecommendationService()
     let diagnosticsService = MCPDiagnosticsService()
     let skillImportService = SkillImportService()
+    let contextUsageService: ContextUsageService
     @ObservationIgnored let workspaceMonitor = ActiveWorkspaceMonitor()
 
     @ObservationIgnored private let isAutoloadEnabled: Bool
     @ObservationIgnored var initialLoadTask: Task<Void, Never>?
     @ObservationIgnored var adoptionLoopTask: Task<Void, Never>?
+    @ObservationIgnored var usageRefreshTask: Task<Void, Never>?
     @ObservationIgnored var syncDebounceTask: Task<Void, Never>?
     @ObservationIgnored var projectSyncDebounceTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored var syncAllTask: Task<Void, Never>?
@@ -95,8 +118,9 @@ public final class AppState {
     @ObservationIgnored private var loadingSkillPreviewIds: Set<String> = []
     @ObservationIgnored var lastLocalChangeDate = Date.distantPast
 
-    public init(autoload: Bool = true) {
+    public init(autoload: Bool = true, contextUsageService: ContextUsageService = ContextUsageService()) {
         self.isAutoloadEnabled = autoload
+        self.contextUsageService = contextUsageService
         if autoload {
             workspaceMonitor.start(with: self)
             initialLoadTask = Task { [weak self] in
@@ -104,6 +128,7 @@ public final class AppState {
                 guard !Task.isCancelled, !PathConstants.isRunningUnderTests else { return }
                 await self?.workspaceMonitor.checkIDefocusWorkspace()
                 self?.startAdoptionLoopIfNeeded()
+                self?.startUsageRefreshLoopIfNeeded()
             }
         }
     }
@@ -116,6 +141,76 @@ public final class AppState {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
             }
         }
+    }
+
+    func startUsageRefreshLoopIfNeeded() {
+        guard isAutoloadEnabled, !PathConstants.isRunningUnderTests, usageRefreshTask == nil else { return }
+        usageRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshContextUsage()
+                try? await Task.sleep(nanoseconds: 300_000_000_000)
+            }
+        }
+    }
+
+    public func refreshContextUsage() async {
+        guard !isRefreshingContextUsage else { return }
+        isRefreshingContextUsage = true
+        defer { isRefreshingContextUsage = false }
+        let curServers = servers
+        let curSkills = skills
+        let curProjects = projects
+        let snapshot = await contextUsageService.computeSnapshot(
+            servers: curServers,
+            skills: curSkills,
+            projects: curProjects
+        )
+        guard !Task.isCancelled else { return }
+        contextUsage = snapshot
+    }
+
+    public func contextSummary(for project: ProjectProfile?) -> WorkspaceContextSummary {
+        contextUsage.summary(
+            for: project,
+            globalServerIds: globalServerIds,
+            globalSkillIds: globalSkillIds
+        )
+    }
+
+    /// Disables all Project Scope resources on a project that have 0 recorded invocations in the Observation Window.
+    public func disableDormantProjectResources(projectId: String) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        let summary = contextSummary(for: projects[index])
+        let dormantMCPs = Set(summary.dormantProjectMCPIds)
+        let dormantSkills = Set(summary.dormantProjectSkillIds)
+        let totalDisabled = dormantMCPs.count + dormantSkills.count
+        guard totalDisabled > 0 else { return }
+
+        projects[index].enabledMCPServerIds.subtract(dormantMCPs)
+        projects[index].enabledSkillIds.subtract(dormantSkills)
+        triggerProjectSync(project: projects[index], debounceNanoseconds: 200_000_000)
+
+        showPopoverFeedback(
+            message: "Disabled \(totalDisabled) dormant resource\(totalDisabled == 1 ? "" : "s")",
+            detail: "Cleaned Project Scope for \(projects[index].name)",
+            requiresChatReload: !dormantMCPs.isEmpty
+        )
+    }
+
+    /// Moves a Global Core resource to Project Scope for only the projects where it was used in the last 30 days.
+    public func moveGlobalResourceToUsedProjects(kind: ManagedResourceKind, id: String) {
+        let stats: ResourceUsageStats
+        switch kind {
+        case .mcp:
+            stats = contextUsage.mcpStats(for: id)
+        case .skill:
+            stats = contextUsage.skillStats(for: id)
+        case .plugin:
+            stats = .empty
+        }
+        let validProjectIds = Set(projects.map(\.id))
+        let usedProjects = stats.usedProjectIds.filter { validProjectIds.contains($0) }
+        demoteGlobalResourceToProjects(kind: kind, id: id, projectIds: usedProjects)
     }
 
     public var selectedProject: ProjectProfile? {
@@ -167,6 +262,8 @@ public final class AppState {
         initialLoadTask = nil
         adoptionLoopTask?.cancel()
         adoptionLoopTask = nil
+        usageRefreshTask?.cancel()
+        usageRefreshTask = nil
         syncDebounceTask?.cancel()
         syncDebounceTask = nil
         for (_, task) in projectSyncDebounceTasks {
@@ -188,19 +285,41 @@ public final class AppState {
     public func showPopoverFeedback(
         message: String,
         detail: String,
-        requiresChatReload: Bool = false
+        requiresChatReload: Bool = false,
+        undoAction: PopoverUndoAction? = nil
     ) {
         popoverFeedbackTask?.cancel()
         popoverFeedback = PopoverFeedback(
             message: message,
             detail: detail,
-            requiresChatReload: requiresChatReload
+            requiresChatReload: requiresChatReload,
+            undoAction: undoAction
         )
         guard !PathConstants.isRunningUnderTests else { return }
+        let durationNs: UInt64 = undoAction != nil ? 6_500_000_000 : 4_500_000_000
         popoverFeedbackTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4_500_000_000)
+            try? await Task.sleep(nanoseconds: durationNs)
             guard !Task.isCancelled else { return }
             self?.popoverFeedback = nil
+        }
+    }
+
+    public func performPopoverUndo() {
+        guard let action = popoverFeedback?.undoAction else { return }
+        dismissPopoverFeedback()
+        switch action {
+        case .reenableGlobalServer(let id):
+            if !globalServerIds.contains(id) {
+                toggleGlobalServer(id: id)
+            }
+        case .reenableGlobalSkill(let id):
+            if !globalSkillIds.contains(id) {
+                toggleGlobalSkill(id: id)
+            }
+        case .reenableGlobalPlugin(let id):
+            if !globalPluginIds.contains(id) {
+                toggleGlobalPlugin(id: id)
+            }
         }
     }
 

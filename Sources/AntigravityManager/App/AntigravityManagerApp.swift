@@ -57,7 +57,7 @@ struct AntigravityManagerApp: App {
                     setupWindowRouter()
                 }
         } label: {
-            if let icon = MenuBarIconProvider.icon(hasRecommendations: appState.hasActiveProjectRecommendations) {
+            if let icon = MenuBarIconProvider.icon {
                 Image(nsImage: icon)
             } else {
                 Image(systemName: "bolt.shield")

@@ -93,49 +93,53 @@ public enum MenuBarIconProvider {
     public static let icon: NSImage? = {
         let size = NSSize(width: 18, height: 18)
 
-        func prepareTemplate(_ img: NSImage) -> NSImage {
+        @MainActor
+        func bitmapRep(fromResource name: String) -> NSBitmapImageRep? {
+            guard let url = resourceURL(forResource: name, withExtension: "png"),
+                  let data = try? Data(contentsOf: url),
+                  let rep = NSBitmapImageRep(data: data) else {
+                return nil
+            }
+            rep.size = size
+            return rep
+        }
+
+        // Compose a crisp multi-resolution template image (Retina @2x + 1x) so macOS never upscales 18x18 on HiDPI displays.
+        let pairedCandidates: [(hiDPI: String, standard: String)] = [
+            ("MenuBarIconTemplate@2x", "MenuBarIconTemplate"),
+            ("MenuBarLogo@2x", "MenuBarLogo")
+        ]
+        for pair in pairedCandidates {
+            let hiRep = bitmapRep(fromResource: pair.hiDPI)
+            let stdRep = bitmapRep(fromResource: pair.standard)
+            if hiRep != nil || stdRep != nil {
+                let composed = NSImage(size: size)
+                if let hiRep { composed.addRepresentation(hiRep) }
+                if let stdRep { composed.addRepresentation(stdRep) }
+                composed.isTemplate = true
+                return composed
+            }
+        }
+
+        if let url = resourceURL(forResource: "AppLogo", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
             img.size = size
             img.isTemplate = true
             return img
         }
 
-        let candidates = [
-            "MenuBarIconTemplate",
-            "MenuBarIconTemplate@2x",
-            "MenuBarLogo",
-            "MenuBarLogo@2x",
-            "AppLogo"
-        ]
-        for candidate in candidates {
-            if let url = resourceURL(forResource: candidate, withExtension: "png"),
-               let img = NSImage(contentsOf: url) {
-                return prepareTemplate(img)
-            }
-        }
-
         // Fallback to system symbol
         if let sfImg = NSImage(systemSymbolName: "bolt.shield", accessibilityDescription: "Antigravity Manager") {
-            return prepareTemplate(sfImg)
+            sfImg.size = size
+            sfImg.isTemplate = true
+            return sfImg
         }
 
         return nil
     }()
 
-    public static let badgedIcon: NSImage? = {
-        guard let base = icon else { return nil }
-        let size = NSSize(width: 18, height: 18)
-        let img = NSImage(size: size, flipped: false) { rect in
-            base.draw(in: rect)
-            let dotRect = NSRect(x: rect.maxX - 5.0, y: rect.maxY - 5.0, width: 4.5, height: 4.5)
-            NSColor.black.setFill()
-            NSBezierPath(ovalIn: dotRect).fill()
-            return true
-        }
-        img.isTemplate = true
-        return img
-    }()
-
+    /// Always returns the clean Retina template icon without a notification dot.
     public static func icon(hasRecommendations: Bool) -> NSImage? {
-        hasRecommendations ? (badgedIcon ?? icon) : icon
+        icon
     }
 }

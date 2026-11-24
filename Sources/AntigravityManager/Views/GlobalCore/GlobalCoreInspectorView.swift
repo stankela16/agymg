@@ -9,6 +9,7 @@ public struct GlobalCoreInspectorView: View {
 
     public var body: some View {
         VStack(spacing: 12) {
+            WorkspaceContextAuditCard(state: state, project: nil)
             globalScopeCard
             tokenOptimizationCard
             inheritedProjectsCard

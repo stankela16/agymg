@@ -123,6 +123,21 @@ public struct MenuBarServerRow: View {
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(DesignTokens.inkTertiary)
                     }
+
+                    if isEnabled, state.contextUsage.scannedSessionsCount > 0 {
+                        let stats = state.contextUsage.mcpStats(for: server.id)
+                        let calls = projectId.map { stats.calls(inProject: $0) } ?? stats.totalCalls30d
+                        Text("\(calls)x")
+                            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(calls == 0 ? DesignTokens.tierOrange : DesignTokens.inkTertiary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(calls == 0 ? DesignTokens.tierOrange.opacity(0.12) : DesignTokens.surfaceContainer)
+                            .clipShape(Capsule())
+                            .help(calls == 0
+                                  ? "Dormant: 0 calls in the last 30 days (\(stats.totalCalls30d)x across all projects)"
+                                  : "\(calls) calls in the last 30 days")
+                    }
                 }
 
                 if !isExpanded {
@@ -167,6 +182,15 @@ public struct MenuBarServerRow: View {
                     .foregroundStyle(DesignTokens.inkSecondary)
 
                 Spacer(minLength: 0)
+
+                let fp = state.contextUsage.mcpFootprint(for: server.id)
+                if fp.claudeStartupTokens > 0 {
+                    let toolsSuffix = fp.toolCount > 0 ? "\(fp.toolCount)t · " : ""
+                    Text("\(toolsSuffix)~\(ResourceFootprint.formatTokens(fp.claudeStartupTokens)) tok")
+                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                        .help("Estimated Context Footprint: ~\(fp.antigravityStartupTokens) tok (Antigravity) / ~\(fp.claudeStartupTokens) tok (Claude Code)")
+                }
             }
 
             HStack(alignment: .top, spacing: DesignTokens.Spacing.xxs) {
@@ -211,16 +235,30 @@ public struct MenuBarServerRow: View {
                 }
             }
 
-            Button {
-                state.navigationSelection = .masterVault
-                WindowRouter.triggerOpen()
-            } label: {
-                Label("Open in Control Center", systemImage: "macwindow")
-                    .font(.system(size: 9.5, weight: .medium))
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                if isInheritedGlobal, let pId = projectId {
+                    Button {
+                        state.demoteGlobalResourceToProjects(kind: .mcp, id: server.id, projectIds: [pId])
+                    } label: {
+                        Label("Move to Project-only", systemImage: "arrow.down.right.circle")
+                            .font(.system(size: 9.5, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .help("Remove \(server.name) from Global Core and keep enabled only in \(project?.name ?? "this project")")
+                }
+
+                Button {
+                    state.navigationSelection = .masterVault
+                    WindowRouter.triggerOpen()
+                } label: {
+                    Label("Control Center", systemImage: "macwindow")
+                        .font(.system(size: 9.5, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Open \(server.name) in Control Center Master Vault")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .help("Open \(server.name) in Control Center Master Vault")
         }
         .padding(.leading, 14)
         .padding(.bottom, DesignTokens.Spacing.xxs)
@@ -237,12 +275,18 @@ public struct MenuBarServerRow: View {
     @ViewBuilder
     private var toggleControl: some View {
         if isInheritedGlobal {
-            Toggle("", isOn: .constant(true))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(true)
-                .help("\(server.name) is enabled globally via Global Core (inherited)")
+            Toggle("", isOn: Binding(
+                get: { true },
+                set: { newValue in
+                    if !newValue {
+                        state.disableGlobalServerFromProject(id: server.id)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help("Disable \(server.name) in Global Core (applies to all workspaces)")
         } else if let pId = projectId {
             Toggle("", isOn: Binding(
                 get: { isProjectEnabled },

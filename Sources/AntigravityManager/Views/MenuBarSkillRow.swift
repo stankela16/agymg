@@ -141,6 +141,21 @@ public struct MenuBarSkillRow: View {
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(DesignTokens.inkTertiary)
                     }
+
+                    if isEnabled, !isLocalProjectSkill, state.contextUsage.scannedSessionsCount > 0 {
+                        let stats = state.contextUsage.skillStats(for: skill.id)
+                        let calls = projectId.map { stats.calls(inProject: $0) } ?? stats.totalCalls30d
+                        Text("\(calls)x")
+                            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(calls == 0 ? DesignTokens.tierOrange : DesignTokens.inkTertiary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(calls == 0 ? DesignTokens.tierOrange.opacity(0.12) : DesignTokens.surfaceContainer)
+                            .clipShape(Capsule())
+                            .help(calls == 0
+                                  ? "Dormant: 0 invocations in the last 30 days (\(stats.totalCalls30d)x across all projects)"
+                                  : "\(calls) invocations in the last 30 days")
+                    }
                 }
 
                 if !isExpanded {
@@ -173,6 +188,14 @@ public struct MenuBarSkillRow: View {
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
+
+                let fp = state.contextUsage.skillFootprint(for: skill.id)
+                if fp.antigravityStartupTokens > 0 {
+                    Text("~\(ResourceFootprint.formatTokens(fp.antigravityStartupTokens)) / ~\(ResourceFootprint.formatTokens(fp.onDemandTokens)) tok")
+                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(DesignTokens.inkTertiary)
+                        .help("Startup frontmatter: ~\(fp.antigravityStartupTokens) tok · Full SKILL.md on demand: ~\(fp.onDemandTokens) tok")
+                }
             }
 
             if !skill.description.isEmpty {
@@ -202,6 +225,18 @@ public struct MenuBarSkillRow: View {
             }
 
             HStack(spacing: DesignTokens.Spacing.xs) {
+                if isInheritedGlobal, let pId = projectId {
+                    Button {
+                        state.demoteGlobalResourceToProjects(kind: .skill, id: skill.id, projectIds: [pId])
+                    } label: {
+                        Label("Project-only", systemImage: "arrow.down.right.circle")
+                            .font(.system(size: 9.5, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .help("Remove \(skill.name) from Global Core and keep enabled only in \(project?.name ?? "this project")")
+                }
+
                 Button {
                     state.openSkillInControlCenter(skill)
                 } label: {
@@ -251,12 +286,18 @@ public struct MenuBarSkillRow: View {
                 .disabled(true)
                 .help("\(skill.name) is a local skill committed inside the project repository")
         } else if isInheritedGlobal {
-            Toggle("", isOn: .constant(true))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(true)
-                .help("\(skill.name) is enabled globally via Global Core (inherited)")
+            Toggle("", isOn: Binding(
+                get: { true },
+                set: { newValue in
+                    if !newValue {
+                        state.disableGlobalSkillFromProject(id: skill.id)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help("Disable \(skill.name) in Global Core (applies to all workspaces)")
         } else if let pId = projectId {
             Toggle("", isOn: Binding(
                 get: { isProjectEnabled },
@@ -362,15 +403,29 @@ public struct MenuBarPluginRow: View {
                         .foregroundStyle(DesignTokens.ink)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        NSWorkspace.shared.selectFile(plugin.path, inFileViewerRootedAtPath: "")
-                    } label: {
-                        Label("Reveal in Finder", systemImage: "folder")
-                            .font(.system(size: 9.5, weight: .medium))
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        if isInheritedGlobal, let pId = projectId {
+                            Button {
+                                state.demoteGlobalResourceToProjects(kind: .plugin, id: plugin.id, projectIds: [pId])
+                            } label: {
+                                Label("Move to Project-only", systemImage: "arrow.down.right.circle")
+                                    .font(.system(size: 9.5, weight: .medium))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                            .help("Remove \(plugin.name) from Global Core and keep enabled only in \(project?.name ?? "this project")")
+                        }
+
+                        Button {
+                            NSWorkspace.shared.selectFile(plugin.path, inFileViewerRootedAtPath: "")
+                        } label: {
+                            Label("Reveal in Finder", systemImage: "folder")
+                                .font(.system(size: 9.5, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .help("Reveal plugin folder in Finder")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .help("Reveal plugin folder in Finder")
                 }
                 .padding(.leading, 14)
                 .padding(.bottom, DesignTokens.Spacing.xxs)
@@ -457,12 +512,18 @@ public struct MenuBarPluginRow: View {
     @ViewBuilder
     private var toggleControl: some View {
         if isInheritedGlobal {
-            Toggle("", isOn: .constant(true))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(true)
-                .help("\(plugin.name) is enabled globally via Global Core")
+            Toggle("", isOn: Binding(
+                get: { true },
+                set: { newValue in
+                    if !newValue {
+                        state.disableGlobalPluginFromProject(id: plugin.id)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help("Disable \(plugin.name) in Global Core (applies to all workspaces)")
         } else if let pId = projectId {
             Toggle("", isOn: Binding(
                 get: { isProjectEnabled },

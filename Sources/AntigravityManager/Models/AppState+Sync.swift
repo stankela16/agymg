@@ -59,6 +59,97 @@ extension AppState {
         )
     }
 
+    // MARK: - Global Core Actions From Project Context
+
+    public func disableGlobalServerFromProject(id: String) {
+        guard globalServerIds.contains(id) else { return }
+        globalServerIds.remove(id)
+        triggerSync(debounceNanoseconds: 250_000_000)
+        let name = servers.first(where: { $0.id == id })?.name ?? id
+        showPopoverFeedback(
+            message: "Disabled \(name) globally",
+            detail: "Removed from Global Core · new chat to apply",
+            requiresChatReload: true,
+            undoAction: .reenableGlobalServer(id: id)
+        )
+    }
+
+    public func disableGlobalSkillFromProject(id: String) {
+        guard globalSkillIds.contains(id) else { return }
+        globalSkillIds.remove(id)
+        triggerSync(debounceNanoseconds: 250_000_000)
+        let name = skills.first(where: { $0.id == id })?.name ?? id
+        showPopoverFeedback(
+            message: "Disabled \(name) globally",
+            detail: "Removed from Global Core · active immediately",
+            requiresChatReload: false,
+            undoAction: .reenableGlobalSkill(id: id)
+        )
+    }
+
+    public func disableGlobalPluginFromProject(id: String) {
+        guard globalPluginIds.contains(id) else { return }
+        globalPluginIds.remove(id)
+        triggerSync(debounceNanoseconds: 250_000_000)
+        let plugin = plugins.first(where: { $0.id == id })
+        let name = plugin?.name ?? id
+        let hasMCP = plugin?.hasMCP ?? false
+        showPopoverFeedback(
+            message: "Disabled \(name) globally",
+            detail: hasMCP ? "Removed from Global Core · new chat for MCPs" : "Removed from Global Core",
+            requiresChatReload: hasMCP,
+            undoAction: .reenableGlobalPlugin(id: id)
+        )
+    }
+
+    /// Demotes a Global Core resource into Project Scope for the specified projects only.
+    public func demoteGlobalResourceToProjects(kind: ManagedResourceKind, id: String, projectIds: [String]) {
+        let targetSet = Set(projectIds)
+        switch kind {
+        case .mcp:
+            globalServerIds.remove(id)
+        case .skill:
+            globalSkillIds.remove(id)
+        case .plugin:
+            globalPluginIds.remove(id)
+        }
+
+        var affectedProjects: [ProjectProfile] = []
+        for idx in projects.indices where targetSet.contains(projects[idx].id) {
+            switch kind {
+            case .mcp:
+                projects[idx].enabledMCPServerIds.insert(id)
+            case .skill:
+                projects[idx].enabledSkillIds.insert(id)
+            case .plugin:
+                projects[idx].enabledPluginIds.insert(id)
+            }
+            affectedProjects.append(projects[idx])
+        }
+
+        triggerSync(debounceNanoseconds: 200_000_000)
+        for proj in affectedProjects {
+            triggerProjectSync(project: proj, debounceNanoseconds: 250_000_000)
+        }
+
+        let displayName: String = {
+            switch kind {
+            case .mcp: return servers.first(where: { $0.id == id })?.name ?? id
+            case .skill: return skills.first(where: { $0.id == id })?.name ?? id
+            case .plugin: return plugins.first(where: { $0.id == id })?.name ?? id
+            }
+        }()
+
+        let countLabel = affectedProjects.count == 1
+            ? (affectedProjects.first?.name ?? "1 project")
+            : "\(affectedProjects.count) projects"
+        showPopoverFeedback(
+            message: "Moved \(displayName) to \(countLabel)",
+            detail: "Removed from Global Core · kept in Project Scope",
+            requiresChatReload: kind == .mcp
+        )
+    }
+
     // MARK: - Project Toggles
     public func toggleProjectServer(projectId: String, serverId: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }

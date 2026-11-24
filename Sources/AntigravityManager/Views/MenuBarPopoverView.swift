@@ -138,6 +138,7 @@ public struct MenuBarPopoverView: View {
                 }
 
                 Spacer(minLength: DesignTokens.Spacing.xxs)
+                ContextHealthBadge(summary: state.contextSummary(for: state.selectedProject), compact: true)
                 if let selected = state.selectedProject {
                     Text(projectSummaryText(for: selected))
                         .font(.system(size: 9.5, weight: .medium, design: .monospaced))
@@ -334,6 +335,15 @@ public struct MenuBarPopoverView: View {
             }
 
             Spacer(minLength: 0)
+
+            if feedback.undoAction != nil {
+                Button("Undo") {
+                    state.performPopoverUndo()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Re-enable in Global Core")
+            }
 
             Button {
                 state.dismissPopoverFeedback()

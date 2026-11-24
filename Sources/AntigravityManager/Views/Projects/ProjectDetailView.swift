@@ -58,6 +58,7 @@ public struct ProjectDetailView: View {
                 projectStatsBar
                 ProjectIsolationBannerView(projectName: project.name)
                 ProjectRecommendationsCard(state: state, projectId: project.id)
+                WorkspaceContextAuditCard(state: state, project: project)
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                     tabSelector
