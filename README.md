@@ -183,6 +183,7 @@ And because both `.agents/skills/react-perf` and `.claude/skills/react-perf` are
 | `<repo>/.agents/plugins/agy-manager/` | Created (`0600` `mcp_config.json`) **only** when a registered project has at least one project-scoped MCP server enabled; removed when project MCPs are disabled. |
 | `<repo>/.gitignore` & `<repo>/.git/info/exclude` | Appends `.agents/plugins/agy-manager/` to `.gitignore` **only** when `<repo>/.git` exists **and** at least one project MCP server is enabled. Symlinked `.claude/skills/<id>` entries are recorded in local `.git/info/exclude` so `git status` remains clean without modifying `.gitignore`. |
 | `~/.claude/hooks/mcp-oauth-headers.py` | Installed and referenced via `"headersHelper"` **only** when an enabled remote HTTP MCP server has an existing OAuth token entry in `~/.gemini/antigravity/mcp_oauth_tokens.json` and no static `Authorization` header. |
+| `~/.claude/projects/` & Antigravity `brain/` *(read-only)* | Scanned read-only over a rolling 30-day window (with incremental `mtime` + file-size caching) to compute local **Context Health** and invocation counts (`0x` / `Nx`). Never modified, never uploaded. |
 
 > **Safety Invariant**: During sync and purge operations, `agymg` only removes POSIX symlinks in target skill/plugin directories—it never deletes real committed or standalone directories.
 
@@ -193,7 +194,8 @@ And because both `.agents/skills/react-perf` and `.claude/skills/react-perf` are
 - **Master Vault (`~/.gemini/manager-vault/`)**: One local catalog for all MCP servers (`stdio` commands + remote HTTP/SSE endpoints), `SKILL.md` packages, and plugins.
 - **Zero-Config First-Run Bootstrap**: Automatically imports existing MCP servers and skills from both Claude Code (`~/.claude.json`, `~/.claude/skills/`) and Antigravity (`~/.gemini/config/mcp_config.json`, `~/.gemini/config/skills/`).
 - **Global Core vs. Per-Project Isolation**: Keep universal tools (e.g., `github`) in **Global Core** while isolating domain-specific MCPs (`stripe`, `supabase`, `playwright`) to the repositories that actually need them.
-- **Menubar Quick Popover**: Detects your active IDE workspace automatically, surfaces stack-aware recommendations (`package.json`, `Package.swift`, `pyproject.toml`, `Cargo.toml`, `supabase/`), and lets you toggle tools without leaving your editor.
+- **Context Health & 30-Day Usage Audit**: Scores each workspace as **Clean**, **Heavy**, or **Bloated** based on estimated Antigravity vs. Claude Code always-on token footprint and real 30-day invocation counts parsed locally from your session transcripts. Surface dormant (`0x`) tools at a glance, prune unused project tools with **Disable Dormant**, or demote over-broad global tools with **Used Projects Only**.
+- **Menubar Quick Popover**: Detects your active IDE workspace automatically, shows live **Context Health** and `0x`/`Nx` usage badges, surfaces stack-aware recommendations (`package.json`, `Package.swift`, `pyproject.toml`, `Cargo.toml`, `supabase/`), and lets you toggle project or `GLOBAL` resources (with inline **Undo** and **Move to Project-only**) without leaving your editor.
 - **Git & Secret Safety Audits**: Protects `.agents/plugins/agy-manager/` in `.gitignore` when writing project MCP manifests and enforces `0600` owner-only permissions on generated credential configs.
 - **Live External Change Adoption**: Runs a lightweight 15-second reconciliation check so tools added via `claude mcp add`, `agy mcp`, or newly created skill folders are adopted back into your Vault seamlessly.
 - **Automatic & Manual Config Backups**: Before `agymg` touches any external config file for the first time, it snapshots your existing `.claude.json` and `mcp_config.json` into `~/.gemini/manager-vault/backups/snapshot-<timestamp>/` (retaining up to 10 snapshots while always preserving your initial `pre-first-sync` backup, plus one-click manual backups in **Settings → Master Vault**).
@@ -302,6 +304,7 @@ For multi-profile setups, CI, or isolated testing without touching `~/.gemini`:
 Built with **Swift 6** (`strict-concurrency=complete`), **SwiftUI**, and **AppKit** using Swift Package Manager—zero external dependencies.
 
 - Read [AGENTS.md](AGENTS.md) for codebase layout and sync invariants.
+- Read [GLOSSARY.md](GLOSSARY.md) and [`docs/adr/`](docs/adr/) for canonical domain terms and architecture decisions.
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) for build, packaging, and test instructions (`swift test` runs sandboxed unit & integration tests).
 
 ## License

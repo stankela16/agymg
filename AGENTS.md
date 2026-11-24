@@ -23,6 +23,9 @@
    - **Claude Code**: Writes project-scoped `mcpServers` under `projects["<repo_path>"].mcpServers` in `~/.claude.json` and symlinks project skills into `<repo>/.claude/skills/` without touching committed repository-local skills.
 3. **External Adoption (`VaultService.adoptExternalChanges`)**:
    - Every 15 seconds while the app is running, newly added MCP servers (`claude mcp add`, `agy mcp`) and newly created skills (older than 30 seconds so in-flight agent writes are never interrupted) are imported into the Master Vault instead of being overwritten.
+4. **Context Footprint & Usage Analytics (`ContextUsageService`)**:
+   - Background `actor` that estimates skill frontmatter/full tokens and cached MCP tool schema sizes, and scans local Antigravity (`transcript.jsonl`) and Claude Code (`~/.claude/projects/*/*.jsonl`) session logs read-only over a rolling 30-day window (with incremental `mtime` + size caching) to compute `ContextHealthLevel` (`Clean` / `Heavy` / `Bloated`) and dormant resource counts. Disabled by default under `PathConstants.isRunningUnderTests`.
+   - Domain vocabulary is documented in `GLOSSARY.md` and key trade-offs in `docs/adr/`.
 
 ---
 
