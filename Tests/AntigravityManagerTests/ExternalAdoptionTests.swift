@@ -117,7 +117,14 @@ final class ExternalAdoptionTests: XCTestCase {
 
         let claudeSkill = projectURL.appendingPathComponent(".claude/skills/local").path
         XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: claudeSkill), "the committed folder must stay in place")
-        let link = projectURL.appendingPathComponent(".agents/skills/local")
-        XCTAssertEqual(link.resolvingSymlinksInPath().path, projectURL.appendingPathComponent(".claude/skills/local").resolvingSymlinksInPath().path)
+        let legacyLink = projectURL.appendingPathComponent(".agents/skills/local")
+        XCTAssertFalse(fm.fileExists(atPath: legacyLink.path))
+        let skillsManifest = projectURL.appendingPathComponent(".agents/skills.json")
+        XCTAssertTrue(fm.fileExists(atPath: skillsManifest.path))
+        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projectURL), ["local"])
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: skillsManifest)) as? [String: Any])
+        let entries = try XCTUnwrap(json["entries"] as? [[String: Any]])
+        XCTAssertEqual(entries.first?["path"] as? String, ".claude/skills")
+        XCTAssertEqual(entries.first?["include_only"] as? [String], ["local"])
     }
 }

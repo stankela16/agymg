@@ -101,11 +101,12 @@ public struct ProjectScannerService: Sendable {
             }
         }
 
-        // 4. Inspect each project for existing .agents/plugins/, .agents/skills/, and Claude project MCPs
+        // 4. Inspect each project for existing .agents/plugins/, .agents/skills/, discovery manifests, and Claude project MCPs
         var discovered = Array(projectsByPath.values)
         for i in 0..<discovered.count {
             let projectPath = discovered[i].path
-            let pluginsDir = URL(fileURLWithPath: projectPath).appendingPathComponent(".agents/plugins", isDirectory: true)
+            let projectURL = URL(fileURLWithPath: projectPath)
+            let pluginsDir = projectURL.appendingPathComponent(".agents/plugins", isDirectory: true)
             if let pluginFolders = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
                 for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
                     let pluginName = pluginFolder.lastPathComponent
@@ -122,8 +123,9 @@ public struct ProjectScannerService: Sendable {
                     }
                 }
             }
+            discovered[i].enabledPluginIds.formUnion(SyncEngine.readManifestPluginIds(at: projectURL))
 
-            let directMcpFile = URL(fileURLWithPath: projectPath).appendingPathComponent(".agents/mcp_config.json")
+            let directMcpFile = projectURL.appendingPathComponent(".agents/mcp_config.json")
             if let data = try? Data(contentsOf: directMcpFile),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let servers = json["mcpServers"] as? [String: Any] {
@@ -139,13 +141,14 @@ public struct ProjectScannerService: Sendable {
                 }
             }
 
-            let skillsDir = URL(fileURLWithPath: projectPath).appendingPathComponent(".agents/skills", isDirectory: true)
+            let skillsDir = projectURL.appendingPathComponent(".agents/skills", isDirectory: true)
             if let skillFolders = try? fm.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: nil) {
                 for skillFolder in skillFolders where !skillFolder.lastPathComponent.hasPrefix(".") {
                     let skillName = skillFolder.lastPathComponent
                     discovered[i].enabledSkillIds.insert(skillName)
                 }
             }
+            discovered[i].enabledSkillIds.formUnion(SyncEngine.readManifestSkillIds(at: projectURL))
         }
 
         return discovered.sorted { $0.name.lowercased() < $1.name.lowercased() }

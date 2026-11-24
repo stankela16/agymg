@@ -105,7 +105,7 @@ public struct ProjectPluginsTab: View {
                 }
                 if isProjectEnabled {
                     ResourcePillBadge.linkedToProject
-                        .help("Symlink created inside \(projectName)/.agents/plugins/")
+                        .help("Enabled in \(projectName)/.agents/plugins.json")
                 }
             },
             actions: {
@@ -132,7 +132,7 @@ public struct ProjectPluginsTab: View {
                         ))
                         .labelsHidden()
                         .toggleStyle(.switch)
-                        .help(isProjectEnabled ? "Remove plugin symlink from project" : "Create symlink in \(projectName)/.agents/plugins/")
+                        .help(isProjectEnabled ? "Remove plugin from \(projectName)/.agents/plugins.json" : "Enable plugin in \(projectName)/.agents/plugins.json")
                     }
                 }
             }

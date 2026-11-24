@@ -1209,7 +1209,7 @@ public enum CLIRunner {
         }
         var ephemeral = ProjectProfile(id: uniqueId, name: name, path: resolvedRootURL.path)
 
-        // Inspect existing .agents/plugins and .agents/skills on disk
+        // Inspect existing .agents/plugins, .agents/skills, and discovery manifests on disk
         let pluginsDir = resolvedRootURL.appendingPathComponent(".agents/plugins", isDirectory: true)
         if let pluginFolders = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
             for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
@@ -1228,6 +1228,7 @@ public enum CLIRunner {
                 }
             }
         }
+        ephemeral.enabledPluginIds.formUnion(SyncEngine.readManifestPluginIds(at: resolvedRootURL))
 
         let skillsDir = resolvedRootURL.appendingPathComponent(".agents/skills", isDirectory: true)
         if let skillFolders = try? fm.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: nil) {
@@ -1239,6 +1240,7 @@ public enum CLIRunner {
                 }
             }
         }
+        ephemeral.enabledSkillIds.formUnion(SyncEngine.readManifestSkillIds(at: resolvedRootURL))
 
         return (ephemeral, false)
     }

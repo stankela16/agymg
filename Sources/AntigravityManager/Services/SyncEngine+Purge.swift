@@ -116,11 +116,18 @@ extension SyncEngine {
         }
 
         for project in allProjects {
-            let projectSkillURL = URL(fileURLWithPath: project.path).appendingPathComponent(".agents/skills/\(id)")
+            let projectURL = URL(fileURLWithPath: project.path)
+            let projectSkillURL = projectURL.appendingPathComponent(".agents/skills/\(id)")
             if isSymlink(at: projectSkillURL) {
                 try? fm.removeItem(at: projectSkillURL)
             }
-            let claudeProjectSkillURL = URL(fileURLWithPath: project.path).appendingPathComponent(".claude/skills/\(id)")
+            removeResourceFromManifest(
+                id: id,
+                manifestURL: projectURL.appendingPathComponent(".agents/skills.json"),
+                relativeManifestPath: ".agents/skills.json",
+                projectURL: projectURL
+            )
+            let claudeProjectSkillURL = projectURL.appendingPathComponent(".claude/skills/\(id)")
             if isSymlink(at: claudeProjectSkillURL) {
                 try? fm.removeItem(at: claudeProjectSkillURL)
             }
@@ -152,12 +159,19 @@ extension SyncEngine {
         }
 
         for project in allProjects {
-            let projectPluginURL = URL(fileURLWithPath: project.path).appendingPathComponent(".agents/plugins/\(id)")
+            let projectURL = URL(fileURLWithPath: project.path)
+            let projectPluginURL = projectURL.appendingPathComponent(".agents/plugins/\(id)")
             if isSymlink(at: projectPluginURL) {
                 try? fm.removeItem(at: projectPluginURL)
             }
+            removeResourceFromManifest(
+                id: id,
+                manifestURL: projectURL.appendingPathComponent(".agents/plugins.json"),
+                relativeManifestPath: ".agents/plugins.json",
+                projectURL: projectURL
+            )
 
-            let claudeProjSkills = URL(fileURLWithPath: project.path).appendingPathComponent(".claude/skills", isDirectory: true)
+            let claudeProjSkills = projectURL.appendingPathComponent(".claude/skills", isDirectory: true)
             if let items = try? fm.contentsOfDirectory(at: claudeProjSkills, includingPropertiesForKeys: nil) {
                 for item in items where isSymlink(at: item) {
                     if let dest = try? fm.destinationOfSymbolicLink(atPath: item.path) {
@@ -171,6 +185,73 @@ extension SyncEngine {
         }
     }
 
+    private func removeResourceFromManifest(
+        id: String,
+        manifestURL: URL,
+        relativeManifestPath: String,
+        projectURL: URL
+    ) {
+        let fm = FileManager.default
+        guard let data = try? Data(contentsOf: manifestURL),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = root["entries"] as? [[String: Any]] else {
+            return
+        }
+
+        var modified = false
+        var updatedEntries: [[String: Any]] = []
+
+        for var entry in entries {
+            if let includeOnly = entry["include_only"] as? [String] {
+                let filtered = includeOnly.filter { rawItem in
+                    let trimmed = rawItem.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let candidate = trimmed.contains("/")
+                        ? URL(fileURLWithPath: trimmed).lastPathComponent
+                        : trimmed
+                    return candidate != id
+                }
+                if filtered.count != includeOnly.count {
+                    modified = true
+                }
+                if filtered.isEmpty {
+                    modified = true
+                    continue
+                }
+                entry["include_only"] = filtered
+                updatedEntries.append(entry)
+            } else if let rawPath = entry["path"] as? String {
+                let resolvedPath = Self.canonicalPathString(rawPath, relativeTo: projectURL)
+                let pointsToVault = Self.isPathInsideVault(resolvedPath)
+                    || (rawPath.hasPrefix("/") && Self.isPathInsideVault(rawPath))
+                if pointsToVault && URL(fileURLWithPath: resolvedPath).lastPathComponent == id {
+                    modified = true
+                    continue
+                }
+                updatedEntries.append(entry)
+            } else {
+                updatedEntries.append(entry)
+            }
+        }
+
+        guard modified else { return }
+
+        if updatedEntries.isEmpty {
+            root.removeValue(forKey: "entries")
+        } else {
+            root["entries"] = updatedEntries
+        }
+
+        if root.isEmpty {
+            try? fm.removeItem(at: manifestURL)
+            removeGitExcludeEntries(at: projectURL, entries: [relativeManifestPath])
+        } else if let updatedData = try? JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        ) {
+            try? updatedData.write(to: manifestURL, options: .atomic)
+        }
+    }
+
     // MARK: - Uninstall & Restore
     public func uninstallAndRestore(
         projects: [ProjectProfile],
@@ -179,25 +260,9 @@ extension SyncEngine {
         let fm = FileManager.default
         let vaultDir = PathConstants.vaultDirectory
         let vaultStdPath = vaultDir.standardizedFileURL.path
-
-        func resolveEvenIfMissing(_ url: URL) -> String {
-            let std = url.standardizedFileURL
-            if fm.fileExists(atPath: std.path) {
-                return std.resolvingSymlinksInPath().path
-            }
-            let parent = std.deletingLastPathComponent()
-            let leaf = std.lastPathComponent
-            if parent.path == std.path || leaf.isEmpty {
-                return std.path
-            }
-            return URL(fileURLWithPath: resolveEvenIfMissing(parent))
-                .appendingPathComponent(leaf)
-                .standardizedFileURL.path
-        }
-
-        let vaultResolvedPath = resolveEvenIfMissing(vaultDir)
+        let vaultResolvedPath = Self.resolveEvenIfMissing(vaultDir)
         let vaultSkillsStdPath = PathConstants.vaultSkillsDirectory.standardizedFileURL.path
-        let vaultSkillsResolvedPath = resolveEvenIfMissing(PathConstants.vaultSkillsDirectory)
+        let vaultSkillsResolvedPath = Self.resolveEvenIfMissing(PathConstants.vaultSkillsDirectory)
 
         var summary = UninstallRestoreSummary(vaultPath: vaultDir.path)
 
@@ -207,7 +272,7 @@ extension SyncEngine {
                 return nil
             }
             let absDest = URL(fileURLWithPath: rawDest, relativeTo: symlinkURL.deletingLastPathComponent()).standardizedFileURL
-            let resolvedDestPath = resolveEvenIfMissing(absDest)
+            let resolvedDestPath = Self.resolveEvenIfMissing(absDest)
             if absDest.path == vaultStdPath
                 || absDest.path.hasPrefix(vaultStdPath + "/")
                 || resolvedDestPath == vaultResolvedPath
@@ -223,7 +288,7 @@ extension SyncEngine {
             for item in items {
                 guard let vaultTarget = vaultDestination(for: item) else { continue }
                 let parentStd = vaultTarget.deletingLastPathComponent().standardizedFileURL.path
-                let parentResolved = resolveEvenIfMissing(vaultTarget.deletingLastPathComponent())
+                let parentResolved = Self.resolveEvenIfMissing(vaultTarget.deletingLastPathComponent())
                 let isTopLevelVaultSkill = (parentStd == vaultSkillsStdPath || parentResolved == vaultSkillsResolvedPath)
 
                 if isTopLevelVaultSkill && fm.fileExists(atPath: vaultTarget.path) {
@@ -285,7 +350,7 @@ extension SyncEngine {
             }
         }
 
-        // 4. Remove per-project agy-manager wrappers and Vault symlinks
+        // 4. Remove per-project agy-manager wrappers, Vault symlinks, and Vault discovery manifest entries
         for projPath in projectPaths {
             let projURL = URL(fileURLWithPath: projPath)
             guard fm.fileExists(atPath: projURL.path) else { continue }
@@ -309,22 +374,53 @@ extension SyncEngine {
                 }
             }
 
-            if !removedExcludeEntries.isEmpty {
-                let excludeURL = projURL.appendingPathComponent(".git/info/exclude")
-                if let content = try? String(contentsOf: excludeURL, encoding: .utf8) {
-                    let filtered = content
-                        .components(separatedBy: .newlines)
-                        .filter { !removedExcludeEntries.contains($0.trimmingCharacters(in: .whitespaces)) }
-                        .joined(separator: "\n")
-                    try? filtered.write(to: excludeURL, atomically: true, encoding: .utf8)
+            for manifestRelPath in [".agents/skills.json", ".agents/plugins.json"] {
+                let manifestURL = projURL.appendingPathComponent(manifestRelPath)
+                guard let data = try? Data(contentsOf: manifestURL),
+                      var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let entries = root["entries"] as? [[String: Any]] else {
+                    continue
+                }
+                var changed = false
+                let keptEntries = entries.filter { entry in
+                    guard let rawPath = entry["path"] as? String else { return true }
+                    let resolvedPath = Self.canonicalPathString(rawPath, relativeTo: projURL)
+                    let pointsToVault = Self.isPathInsideVault(resolvedPath)
+                        || (rawPath.hasPrefix("/") && Self.isPathInsideVault(rawPath))
+                    if pointsToVault {
+                        changed = true
+                        return false
+                    }
+                    return true
+                }
+                guard changed else { continue }
+
+                if keptEntries.isEmpty {
+                    root.removeValue(forKey: "entries")
+                } else {
+                    root["entries"] = keptEntries
+                }
+
+                if root.isEmpty {
+                    if (try? fm.removeItem(at: manifestURL)) != nil {
+                        summary.removedProjectWrappers.append(manifestURL.path)
+                        removedExcludeEntries.insert(manifestRelPath)
+                    }
+                } else if let updatedData = try? JSONSerialization.data(
+                    withJSONObject: root,
+                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                ) {
+                    try? updatedData.write(to: manifestURL, options: .atomic)
                 }
             }
+
+            removeGitExcludeEntries(at: projURL, entries: removedExcludeEntries)
         }
 
         // 5. Remove Claude OAuth helper script and strip its headersHelper references from ~/.claude.json
         let helperScript = PathConstants.claudeMCPOAuthHelperScript
         let helperPath = helperScript.path
-        let helperResolvedPath = resolveEvenIfMissing(helperScript)
+        let helperResolvedPath = Self.resolveEvenIfMissing(helperScript)
         if fm.fileExists(atPath: helperPath) || isSymlink(at: helperScript) {
             if (try? fm.removeItem(at: helperScript)) != nil {
                 summary.removedHelperScript = true

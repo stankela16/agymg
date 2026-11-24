@@ -160,7 +160,7 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
         let restoredSecret = try String(contentsOf: vaultPluginDir.appendingPathComponent("secret.txt"), encoding: .utf8)
         XCTAssertEqual(restoredSecret, "CONFIDENTIAL_KEY_XYZ")
 
-        // Enable the Vault-backed plugin on a second workspace and verify symlink creation
+        // Enable the Vault-backed plugin on a second workspace and verify .agents/plugins.json manifest creation
         let consumerDir = testSandboxDir.appendingPathComponent("Projects/SafeSyncConsumer", isDirectory: true)
         try fm.createDirectory(at: consumerDir, withIntermediateDirectories: true)
         let consumerPluginURL = consumerDir.appendingPathComponent(".agents/plugins/safe-plugin")
@@ -174,11 +174,16 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
         )
         try await syncEngine.syncProject(project: consumerProj, allServers: [], allSkills: [], allPlugins: [pluginDef])
 
-        XCTAssertTrue(fm.fileExists(atPath: consumerPluginURL.path))
         let isSym = await syncEngine.isSymlink(at: consumerPluginURL)
-        XCTAssertTrue(isSym, "Enabled plugin in consumer project must be a symlink to Master Vault")
-        let destination = try fm.destinationOfSymbolicLink(atPath: consumerPluginURL.path)
-        XCTAssertEqual(destination, vaultPluginDir.path)
+        XCTAssertFalse(isSym, "Enabled plugin in consumer project must NOT be symlinked in .agents/plugins")
+        let pluginsManifestURL = consumerDir.appendingPathComponent(".agents/plugins.json")
+        XCTAssertTrue(fm.fileExists(atPath: pluginsManifestURL.path), "Enabled plugin must be written to .agents/plugins.json")
+        XCTAssertEqual(SyncEngine.readManifestPluginIds(at: consumerDir), ["safe-plugin"])
+        let pluginsData = try Data(contentsOf: pluginsManifestURL)
+        let pluginsJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: pluginsData) as? [String: Any])
+        let entries = try XCTUnwrap(pluginsJSON["entries"] as? [[String: Any]])
+        XCTAssertEqual(entries.first?["path"] as? String, vaultPluginDir.resolvingSymlinksInPath().deletingLastPathComponent().path)
+        XCTAssertEqual(entries.first?["include_only"] as? [String], ["safe-plugin"])
     }
 
     // MARK: - 4. Skill Deduplication

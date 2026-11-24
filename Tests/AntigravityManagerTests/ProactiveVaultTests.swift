@@ -349,8 +349,10 @@ final class ProactiveVaultTests: XCTestCase {
         // Verify disk sync artifacts were created
         let mcpManifest = projDir.appendingPathComponent(".agents/plugins/agy-manager/mcp_config.json")
         XCTAssertTrue(fm.fileExists(atPath: mcpManifest.path), "SyncEngine must write .agents/plugins/agy-manager/mcp_config.json")
-        let skillSymlink = projDir.appendingPathComponent(".agents/skills/ui-architect")
-        XCTAssertTrue(fm.fileExists(atPath: skillSymlink.path), "SyncEngine must symlink enabled skill into .agents/skills")
+        let skillsManifest = projDir.appendingPathComponent(".agents/skills.json")
+        XCTAssertTrue(fm.fileExists(atPath: skillsManifest.path), "SyncEngine must write .agents/skills.json for Antigravity")
+        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projDir), ["ui-architect"])
+        XCTAssertEqual(SyncEngine.readManifestPluginIds(at: projDir), ["modern-web-guidance-plugin"])
         let claudeSkillSymlink = projDir.appendingPathComponent(".claude/skills/ui-architect")
         XCTAssertTrue(fm.fileExists(atPath: claudeSkillSymlink.path), "SyncEngine must symlink enabled skill into .claude/skills")
 
@@ -367,8 +369,9 @@ final class ProactiveVaultTests: XCTestCase {
         XCTAssertEqual(disableSkillRes.exitCode, 0)
         let decodedSkillOnly = try JSONDecoder().decode(CLISetResponse.self, from: Data(disableSkillRes.stdout.utf8))
         XCTAssertFalse(decodedSkillOnly.requiresSessionReloadForMCP, "Skill-only change should not require MCP session reload")
-        XCTAssertFalse(fm.fileExists(atPath: skillSymlink.path))
-        XCTAssertTrue(fm.fileExists(atPath: projDir.appendingPathComponent(".agents/skills/security-review").path))
+        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projDir), ["security-review"])
+        XCTAssertFalse(fm.fileExists(atPath: claudeSkillSymlink.path))
+        XCTAssertTrue(fm.fileExists(atPath: projDir.appendingPathComponent(".claude/skills/security-review").path))
 
         // 3. Test Global set
         let globalRes = await CLIRunner.execute(

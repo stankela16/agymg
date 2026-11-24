@@ -53,82 +53,65 @@ extension SyncEngine {
             try PathConstants.writeSecureData(mcpData, to: mcpConfigURL, permissions: 0o600)
         }
 
-        // 2. Sync Project Skills (via .agents/skills/<skill-id>)
+        // 2. Sync Project Skills (via .agents/skills.json discovery manifest)
         let projectSkillsDir = agentsDir.appendingPathComponent("skills", isDirectory: true)
         let vaultSkillsDir = PathConstants.vaultSkillsDirectory
+        var (skillInput, includedSkillIds) = prepareManifestResources(
+            items: allSkills.map { ($0.id, $0.path) },
+            enabledIds: project.enabledSkillIds,
+            projectItemsDir: projectSkillsDir,
+            vaultItemsDir: vaultSkillsDir
+        )
 
-        if !project.enabledSkillIds.isEmpty {
-            try fm.createDirectory(at: projectSkillsDir, withIntermediateDirectories: true)
+        let claudeLocalSkillsDir = projectURL.appendingPathComponent(".claude/skills", isDirectory: true)
+        let claudeLocalIds = collectAndCleanClaudeLocalSkillIds(
+            projectURL: projectURL,
+            claudeSkillsDir: claudeLocalSkillsDir,
+            agentsSkillsDir: projectSkillsDir
+        ).filter { !includedSkillIds.contains($0) }
+
+        skillInput.replaceIncludeOnlyPaths.formUnion([
+            Self.resolveEvenIfMissing(claudeLocalSkillsDir),
+            claudeLocalSkillsDir.standardizedFileURL.path,
+            ".claude/skills"
+        ])
+        if !claudeLocalIds.isEmpty {
+            skillInput.desiredGroups.append((path: ".claude/skills", includeOnly: claudeLocalIds))
         }
 
-        for skill in allSkills where PathConstants.isSafeResourceId(skill.id) {
-            let targetURL = projectSkillsDir.appendingPathComponent(skill.id)
-            let vaultSkillURL = vaultSkillsDir.appendingPathComponent(skill.id)
-            let sourceURL = fm.fileExists(atPath: vaultSkillURL.path)
-                ? vaultSkillURL
-                : URL(fileURLWithPath: skill.path)
+        try syncDiscoveryManifest(
+            at: agentsDir.appendingPathComponent("skills.json"),
+            projectURL: projectURL,
+            relativeManifestPath: ".agents/skills.json",
+            desiredGroups: skillInput.desiredGroups,
+            managedDirPaths: skillInput.managedDirPaths,
+            managedSinglePaths: skillInput.managedSinglePaths,
+            replaceIncludeOnlyPaths: skillInput.replaceIncludeOnlyPaths,
+            pruneAllVaultEntries: true
+        )
 
-            if project.enabledSkillIds.contains(skill.id) {
-                if isSymlink(at: targetURL) {
-                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                    if symlinkDest != sourceURL.path {
-                        try? fm.removeItem(at: targetURL)
-                        if fm.fileExists(atPath: sourceURL.path) {
-                            try? fm.createSymbolicLink(at: targetURL, withDestinationURL: sourceURL)
-                        }
-                    }
-                } else if !fm.fileExists(atPath: targetURL.path) {
-                    if fm.fileExists(atPath: sourceURL.path) {
-                        try? fm.createSymbolicLink(at: targetURL, withDestinationURL: sourceURL)
-                    }
-                }
-            } else {
-                if isSymlink(at: targetURL) {
-                    try? fm.removeItem(at: targetURL)
-                }
-            }
-        }
-
-        // 3. Sync Project Plugins (via .agents/plugins/<plugin-id>)
+        // 3. Sync Project Plugins (via .agents/plugins.json discovery manifest, keeping agy-manager physical)
         let projectPluginsDir = agentsDir.appendingPathComponent("plugins", isDirectory: true)
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
+        let (pluginInput, _) = prepareManifestResources(
+            items: allPlugins.map { ($0.id, $0.path) },
+            enabledIds: project.enabledPluginIds,
+            projectItemsDir: projectPluginsDir,
+            vaultItemsDir: vaultPluginsDir,
+            excludedIds: ["agy-manager"],
+            backupDisabledPhysicalToVault: true
+        )
 
-        for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) {
-            guard plugin.id != "agy-manager" else { continue }
-            let targetURL = projectPluginsDir.appendingPathComponent(plugin.id)
-            let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
-            let sourceURL = fm.fileExists(atPath: vaultPluginURL.path)
-                ? vaultPluginURL
-                : URL(fileURLWithPath: plugin.path)
-
-            if project.enabledPluginIds.contains(plugin.id) {
-                if targetURL.resolvingSymlinksInPath().path == sourceURL.resolvingSymlinksInPath().path && !isSymlink(at: targetURL) {
-                    continue
-                }
-                try fm.createDirectory(at: projectPluginsDir, withIntermediateDirectories: true)
-                if isSymlink(at: targetURL) {
-                    let symlinkDest = try? fm.destinationOfSymbolicLink(atPath: targetURL.path)
-                    if symlinkDest != sourceURL.path {
-                        try? fm.removeItem(at: targetURL)
-                        if fm.fileExists(atPath: sourceURL.path) {
-                            try? fm.createSymbolicLink(at: targetURL, withDestinationURL: sourceURL)
-                        }
-                    }
-                } else if !fm.fileExists(atPath: targetURL.path) {
-                    if fm.fileExists(atPath: sourceURL.path) {
-                        try? fm.createSymbolicLink(at: targetURL, withDestinationURL: sourceURL)
-                    }
-                }
-            } else {
-                if isSymlink(at: targetURL) {
-                    try? fm.removeItem(at: targetURL)
-                } else if fm.fileExists(atPath: targetURL.path),
-                          !fm.fileExists(atPath: vaultPluginURL.path) {
-                    try? fm.createDirectory(at: vaultPluginsDir, withIntermediateDirectories: true)
-                    try? fm.copyItem(at: targetURL, to: vaultPluginURL)
-                }
-            }
-        }
+        try syncDiscoveryManifest(
+            at: agentsDir.appendingPathComponent("plugins.json"),
+            projectURL: projectURL,
+            relativeManifestPath: ".agents/plugins.json",
+            desiredGroups: pluginInput.desiredGroups,
+            managedDirPaths: pluginInput.managedDirPaths,
+            managedSinglePaths: pluginInput.managedSinglePaths,
+            replaceIncludeOnlyPaths: pluginInput.replaceIncludeOnlyPaths,
+            pruneAllVaultEntries: true
+        )
 
         // 4. Sync Project MCP Servers to Claude (~/.claude.json -> projects[project.path].mcpServers)
         syncClaudeProjectMCP(project: project, allServers: allServers, allPlugins: allPlugins)
@@ -227,30 +210,52 @@ extension SyncEngine {
     }
 
     /// A skill created in <project>/.claude/skills is a real folder, often committed, so it stays there:
-    /// a symlink in .agents/skills is enough for Antigravity to see it.
+    /// referencing it via .agents/skills.json is enough for Antigravity to see it.
     public func linkClaudeProjectSkills(project: ProjectProfile) {
         let fm = FileManager.default
         let projectURL = URL(fileURLWithPath: project.path)
+        let agentsDir = projectURL.appendingPathComponent(".agents", isDirectory: true)
+        let manifestURL = agentsDir.appendingPathComponent("skills.json")
         let claudeSkillsDir = projectURL.appendingPathComponent(".claude/skills", isDirectory: true)
-        let agentsSkillsDir = projectURL.appendingPathComponent(".agents/skills", isDirectory: true)
-        // No .skipsHiddenFiles: it also drops folders with the macOS `hidden` flag, which project folders here carry.
-        guard let items = try? fm.contentsOfDirectory(at: claudeSkillsDir, includingPropertiesForKeys: nil) else { return }
+        let agentsSkillsDir = agentsDir.appendingPathComponent("skills", isDirectory: true)
 
-        var linkedSkillIds: [String] = []
-        for item in items where !isSymlink(at: item) && fm.fileExists(atPath: item.appendingPathComponent("SKILL.md").path) {
-            let skillId = item.lastPathComponent
-            guard PathConstants.isSafeResourceId(skillId) else { continue }
-            let targetURL = agentsSkillsDir.appendingPathComponent(skillId)
-            guard !fm.fileExists(atPath: targetURL.path), !isSymlink(at: targetURL) else { continue }
-            try? fm.createDirectory(at: agentsSkillsDir, withIntermediateDirectories: true)
-            if (try? fm.createSymbolicLink(at: targetURL, withDestinationURL: item)) != nil {
-                linkedSkillIds.append(skillId)
-            }
-        }
-        ensureGitExcludeForSkills(at: projectURL, directory: ".agents/skills", symlinkedSkillIds: linkedSkillIds)
+        let manifestExists = fm.fileExists(atPath: manifestURL.path)
+        guard fm.fileExists(atPath: claudeSkillsDir.path) || manifestExists else { return }
+
+        let claudeLocalIds = collectAndCleanClaudeLocalSkillIds(
+            projectURL: projectURL,
+            claudeSkillsDir: claudeSkillsDir,
+            agentsSkillsDir: agentsSkillsDir
+        )
+
+        guard !claudeLocalIds.isEmpty || manifestExists else { return }
+
+        let desiredGroups: [(path: String, includeOnly: [String]?)] = claudeLocalIds.isEmpty
+            ? []
+            : [(path: ".claude/skills", includeOnly: claudeLocalIds)]
+
+        try? syncDiscoveryManifest(
+            at: manifestURL,
+            projectURL: projectURL,
+            relativeManifestPath: ".agents/skills.json",
+            desiredGroups: desiredGroups,
+            managedDirPaths: [],
+            managedSinglePaths: [],
+            replaceIncludeOnlyPaths: [
+                Self.resolveEvenIfMissing(claudeSkillsDir),
+                claudeSkillsDir.standardizedFileURL.path,
+                ".claude/skills"
+            ],
+            pruneAllVaultEntries: false
+        )
     }
 
     private func ensureGitExcludeForSkills(at projectURL: URL, directory: String, symlinkedSkillIds: [String]) {
+        ensureGitExcludeEntries(at: projectURL, entries: symlinkedSkillIds.map { "\(directory)/\($0)" })
+    }
+
+    func ensureGitExcludeEntries(at projectURL: URL, entries: [String]) {
+        guard !entries.isEmpty else { return }
         let fm = FileManager.default
         let gitExcludeURL = projectURL.appendingPathComponent(".git/info/exclude")
         guard fm.fileExists(atPath: gitExcludeURL.deletingLastPathComponent().path) else { return }
@@ -258,12 +263,19 @@ extension SyncEngine {
         let existingContent = (try? String(contentsOf: gitExcludeURL, encoding: .utf8)) ?? ""
         let existingLines = Set(existingContent.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) })
 
-        let rootDirectory = String(directory.prefix { $0 != "/" })
         var linesToAdd: [String] = []
-        for skillId in symlinkedSkillIds.sorted() {
-            let entry = "\(directory)/\(skillId)"
-            if !existingLines.contains(entry) && !existingLines.contains("\(rootDirectory)/") && !existingLines.contains(rootDirectory) {
-                linesToAdd.append(entry)
+        for entry in entries.sorted() {
+            let trimmed = entry.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            let rootDirectory = String(trimmed.prefix { $0 != "/" })
+            let alreadyExcluded = existingLines.contains(trimmed)
+                || (!rootDirectory.isEmpty && (
+                    existingLines.contains("\(rootDirectory)/")
+                    || existingLines.contains(rootDirectory)
+                    || existingLines.contains("\(rootDirectory)/*")
+                ))
+            if !alreadyExcluded {
+                linesToAdd.append(trimmed)
             }
         }
 
@@ -274,6 +286,346 @@ extension SyncEngine {
         }
         updated += linesToAdd.joined(separator: "\n") + "\n"
         try? updated.write(to: gitExcludeURL, atomically: true, encoding: .utf8)
+    }
+
+    func removeGitExcludeEntries(at projectURL: URL, entries: Set<String>) {
+        guard !entries.isEmpty else { return }
+        let fm = FileManager.default
+        let gitExcludeURL = projectURL.appendingPathComponent(".git/info/exclude")
+        guard fm.fileExists(atPath: gitExcludeURL.path),
+              let existingContent = try? String(contentsOf: gitExcludeURL, encoding: .utf8) else {
+            return
+        }
+
+        let hadTrailingNewline = existingContent.hasSuffix("\n")
+        let lines = existingContent.components(separatedBy: .newlines)
+        let filtered = lines.filter { !entries.contains($0.trimmingCharacters(in: .whitespaces)) }
+        guard filtered.count != lines.count else { return }
+
+        var updated = filtered.joined(separator: "\n")
+        if hadTrailingNewline && !updated.isEmpty && !updated.hasSuffix("\n") {
+            updated += "\n"
+        }
+        try? updated.write(to: gitExcludeURL, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Discovery Manifest Helpers (.agents/skills.json & .agents/plugins.json)
+    private struct ManifestBuildInput {
+        var desiredGroups: [(path: String, includeOnly: [String]?)] = []
+        var managedDirPaths: Set<String> = []
+        var managedSinglePaths: Set<String> = []
+        var replaceIncludeOnlyPaths: Set<String> = []
+    }
+
+    nonisolated public static func resolveEvenIfMissing(_ url: URL) -> String {
+        let fm = FileManager.default
+        let std = url.standardizedFileURL
+        if fm.fileExists(atPath: std.path) {
+            return std.resolvingSymlinksInPath().path
+        }
+        let parent = std.deletingLastPathComponent()
+        let leaf = std.lastPathComponent
+        if parent.path == std.path || leaf.isEmpty {
+            return std.path
+        }
+        return URL(fileURLWithPath: resolveEvenIfMissing(parent))
+            .appendingPathComponent(leaf)
+            .standardizedFileURL.path
+    }
+
+    nonisolated public static func canonicalPathString(_ rawPath: String, relativeTo baseURL: URL) -> String {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let targetURL: URL
+        if trimmed.hasPrefix("/") {
+            targetURL = URL(fileURLWithPath: trimmed)
+        } else if trimmed == "~" {
+            targetURL = PathConstants.effectiveHomeDirectory
+        } else if trimmed.hasPrefix("~/") {
+            targetURL = PathConstants.effectiveHomeDirectory.appendingPathComponent(String(trimmed.dropFirst(2)))
+        } else {
+            targetURL = baseURL.appendingPathComponent(trimmed)
+        }
+        return resolveEvenIfMissing(targetURL)
+    }
+
+    nonisolated public static func isPathInsideVault(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        let vaultStd = PathConstants.vaultDirectory.standardizedFileURL.path
+        let vaultResolved = resolveEvenIfMissing(PathConstants.vaultDirectory)
+        let candidateStd = URL(fileURLWithPath: path).standardizedFileURL.path
+        let candidateResolved = resolveEvenIfMissing(URL(fileURLWithPath: path))
+        return candidateStd == vaultStd
+            || candidateStd.hasPrefix(vaultStd + "/")
+            || candidateResolved == vaultResolved
+            || candidateResolved.hasPrefix(vaultResolved + "/")
+    }
+
+    nonisolated public static func readManifestResourceIds(
+        at manifestURL: URL,
+        excluding excludedIds: Set<String> = []
+    ) -> Set<String> {
+        let fm = FileManager.default
+        guard let data = try? Data(contentsOf: manifestURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = json["entries"] as? [[String: Any]] else {
+            return []
+        }
+
+        let projectURL = manifestURL.deletingLastPathComponent().deletingLastPathComponent()
+        var ids: Set<String> = []
+
+        for entry in entries {
+            if let includeOnly = entry["include_only"] as? [String] {
+                for rawItem in includeOnly {
+                    let trimmed = rawItem.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let candidate = trimmed.contains("/")
+                        ? URL(fileURLWithPath: trimmed).lastPathComponent
+                        : trimmed
+                    if PathConstants.isSafeResourceId(candidate) && !excludedIds.contains(candidate) {
+                        ids.insert(candidate)
+                    }
+                }
+            } else if let rawPath = entry["path"] as? String {
+                let resolved = canonicalPathString(rawPath, relativeTo: projectURL)
+                guard !resolved.isEmpty else { continue }
+                let entryURL = URL(fileURLWithPath: resolved, isDirectory: true)
+                let isSingleSkill = fm.fileExists(atPath: entryURL.appendingPathComponent("SKILL.md").path)
+                let isSinglePlugin = fm.fileExists(atPath: entryURL.appendingPathComponent("plugin.json").path)
+                    || fm.fileExists(atPath: entryURL.appendingPathComponent(".antigravity-plugin/plugin.json").path)
+                    || fm.fileExists(atPath: entryURL.appendingPathComponent(".gemini-plugin/plugin.json").path)
+                    || fm.fileExists(atPath: entryURL.appendingPathComponent("gemini-extension.json").path)
+                if isSingleSkill || isSinglePlugin {
+                    let candidate = entryURL.lastPathComponent
+                    if PathConstants.isSafeResourceId(candidate) && !excludedIds.contains(candidate) {
+                        ids.insert(candidate)
+                    }
+                }
+            }
+        }
+
+        return ids
+    }
+
+    nonisolated public static func readManifestSkillIds(at projectURL: URL) -> Set<String> {
+        readManifestResourceIds(at: projectURL.appendingPathComponent(".agents/skills.json"))
+    }
+
+    nonisolated public static func readManifestPluginIds(at projectURL: URL) -> Set<String> {
+        readManifestResourceIds(
+            at: projectURL.appendingPathComponent(".agents/plugins.json"),
+            excluding: ["agy-manager"]
+        )
+    }
+
+    private func prepareManifestResources(
+        items: [(id: String, path: String)],
+        enabledIds: Set<String>,
+        projectItemsDir: URL,
+        vaultItemsDir: URL,
+        excludedIds: Set<String> = [],
+        backupDisabledPhysicalToVault: Bool = false
+    ) -> (input: ManifestBuildInput, includedIds: Set<String>) {
+        let fm = FileManager.default
+        var input = ManifestBuildInput()
+        var includedIds: Set<String> = []
+        var groupedByParent: [String: [String]] = [:]
+        var singleFolderPaths: Set<String> = []
+
+        input.managedDirPaths.insert(Self.resolveEvenIfMissing(vaultItemsDir))
+        input.managedDirPaths.insert(vaultItemsDir.standardizedFileURL.path)
+
+        for item in items where PathConstants.isSafeResourceId(item.id) && !excludedIds.contains(item.id) {
+            let targetURL = projectItemsDir.appendingPathComponent(item.id)
+            let vaultItemURL = vaultItemsDir.appendingPathComponent(item.id)
+            let sourceURL = fm.fileExists(atPath: vaultItemURL.path)
+                ? vaultItemURL
+                : URL(fileURLWithPath: item.path)
+
+            let targetIsSymlink = isSymlink(at: targetURL)
+            let isPhysicalLocal = fm.fileExists(atPath: targetURL.path) && !targetIsSymlink
+
+            if targetIsSymlink {
+                try? fm.removeItem(at: targetURL)
+            }
+
+            if backupDisabledPhysicalToVault,
+               !enabledIds.contains(item.id),
+               isPhysicalLocal,
+               !fm.fileExists(atPath: vaultItemURL.path) {
+                try? fm.createDirectory(at: vaultItemsDir, withIntermediateDirectories: true)
+                try? fm.copyItem(at: targetURL, to: vaultItemURL)
+            }
+
+            let resolvedSourcePath = Self.resolveEvenIfMissing(sourceURL)
+            let resolvedSourceURL = URL(fileURLWithPath: resolvedSourcePath)
+            if resolvedSourceURL.lastPathComponent == item.id {
+                input.managedDirPaths.insert(resolvedSourceURL.deletingLastPathComponent().path)
+            } else {
+                input.managedSinglePaths.insert(resolvedSourceURL.path)
+            }
+
+            if enabledIds.contains(item.id),
+               !isPhysicalLocal,
+               fm.fileExists(atPath: sourceURL.path) {
+                if resolvedSourceURL.lastPathComponent == item.id {
+                    let parentDir = resolvedSourceURL.deletingLastPathComponent().path
+                    groupedByParent[parentDir, default: []].append(item.id)
+                } else {
+                    singleFolderPaths.insert(resolvedSourceURL.path)
+                }
+                includedIds.insert(item.id)
+            }
+        }
+
+        if let existingItems = try? fm.contentsOfDirectory(at: projectItemsDir, includingPropertiesForKeys: nil) {
+            for entry in existingItems where !excludedIds.contains(entry.lastPathComponent) && isSymlink(at: entry) {
+                if let rawDest = try? fm.destinationOfSymbolicLink(atPath: entry.path) {
+                    let absDest = URL(fileURLWithPath: rawDest, relativeTo: entry.deletingLastPathComponent()).standardizedFileURL.path
+                    if Self.isPathInsideVault(absDest) || rawDest.contains("/.gemini/manager-vault/") {
+                        try? fm.removeItem(at: entry)
+                    }
+                }
+            }
+        }
+
+        for (parentPath, ids) in groupedByParent.sorted(by: { $0.key < $1.key }) {
+            let uniqueSorted = Array(Set(ids)).sorted()
+            if !uniqueSorted.isEmpty {
+                input.desiredGroups.append((path: parentPath, includeOnly: uniqueSorted))
+            }
+        }
+        for singlePath in singleFolderPaths.sorted() {
+            input.desiredGroups.append((path: singlePath, includeOnly: nil))
+        }
+
+        return (input, includedIds)
+    }
+
+    private func collectAndCleanClaudeLocalSkillIds(
+        projectURL: URL,
+        claudeSkillsDir: URL,
+        agentsSkillsDir: URL
+    ) -> [String] {
+        let fm = FileManager.default
+        // No .skipsHiddenFiles: it also drops folders with the macOS `hidden` flag, which project folders here carry.
+        guard let items = try? fm.contentsOfDirectory(at: claudeSkillsDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+
+        var localIds: [String] = []
+        for item in items where !isSymlink(at: item) && fm.fileExists(atPath: item.appendingPathComponent("SKILL.md").path) {
+            let skillId = item.lastPathComponent
+            guard PathConstants.isSafeResourceId(skillId) else { continue }
+
+            let agentsTarget = agentsSkillsDir.appendingPathComponent(skillId)
+            if isSymlink(at: agentsTarget),
+               let rawDest = try? fm.destinationOfSymbolicLink(atPath: agentsTarget.path),
+               rawDest.hasSuffix("/.claude/skills/\(skillId)") {
+                try? fm.removeItem(at: agentsTarget)
+            }
+
+            let hasPhysicalAgentsSkill = fm.fileExists(atPath: agentsTarget.path) && !isSymlink(at: agentsTarget)
+            if !hasPhysicalAgentsSkill {
+                localIds.append(skillId)
+            }
+        }
+
+        return Array(Set(localIds)).sorted()
+    }
+
+    private func syncDiscoveryManifest(
+        at manifestURL: URL,
+        projectURL: URL,
+        relativeManifestPath: String,
+        desiredGroups: [(path: String, includeOnly: [String]?)],
+        managedDirPaths: Set<String>,
+        managedSinglePaths: Set<String>,
+        replaceIncludeOnlyPaths: Set<String>,
+        pruneAllVaultEntries: Bool
+    ) throws {
+        let fm = FileManager.default
+        var root: [String: Any] = [:]
+        let existingData = try? Data(contentsOf: manifestURL)
+        if let existingData,
+           let existingJSON = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any] {
+            root = existingJSON
+        }
+
+        var newManagedByResolvedPath: [String: [String: Any]] = [:]
+        var orderedManagedKeys: [String] = []
+        for group in desiredGroups.sorted(by: { $0.path < $1.path }) {
+            var entryDict: [String: Any] = ["path": group.path]
+            if let includeOnly = group.includeOnly {
+                let sortedIds = Array(Set(includeOnly)).sorted()
+                guard !sortedIds.isEmpty else { continue }
+                entryDict["include_only"] = sortedIds
+            }
+            let resolvedKey = Self.canonicalPathString(group.path, relativeTo: projectURL)
+            if newManagedByResolvedPath[resolvedKey] == nil {
+                orderedManagedKeys.append(resolvedKey)
+            }
+            newManagedByResolvedPath[resolvedKey] = entryDict
+        }
+
+        let existingEntries = (root["entries"] as? [[String: Any]]) ?? []
+        var emittedKeys: Set<String> = []
+        var combinedEntries: [[String: Any]] = []
+
+        for entry in existingEntries {
+            guard let rawPath = entry["path"] as? String else {
+                combinedEntries.append(entry)
+                continue
+            }
+            let resolvedPath = Self.canonicalPathString(rawPath, relativeTo: projectURL)
+            let isVault = pruneAllVaultEntries && (
+                Self.isPathInsideVault(resolvedPath)
+                || (rawPath.hasPrefix("/") && Self.isPathInsideVault(rawPath))
+            )
+            let isManagedSingle = managedSinglePaths.contains(resolvedPath)
+            let hasIncludeOnly = entry["include_only"] != nil
+            let isManagedDir = hasIncludeOnly && managedDirPaths.contains(resolvedPath)
+            let isReplaceIncludeOnly = hasIncludeOnly && replaceIncludeOnlyPaths.contains(resolvedPath)
+
+            if isVault || isManagedSingle || isManagedDir || isReplaceIncludeOnly {
+                if let replacement = newManagedByResolvedPath[resolvedPath],
+                   emittedKeys.insert(resolvedPath).inserted {
+                    combinedEntries.append(replacement)
+                }
+            } else {
+                combinedEntries.append(entry)
+            }
+        }
+
+        for key in orderedManagedKeys where !emittedKeys.contains(key) {
+            if let entry = newManagedByResolvedPath[key] {
+                combinedEntries.append(entry)
+            }
+        }
+
+        if combinedEntries.isEmpty {
+            root.removeValue(forKey: "entries")
+        } else {
+            root["entries"] = combinedEntries
+        }
+
+        if root.isEmpty {
+            if fm.fileExists(atPath: manifestURL.path) || isSymlink(at: manifestURL) {
+                try? fm.removeItem(at: manifestURL)
+            }
+            removeGitExcludeEntries(at: projectURL, entries: [relativeManifestPath])
+            return
+        }
+
+        try fm.createDirectory(at: manifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        )
+        if existingData != data {
+            try data.write(to: manifestURL, options: .atomic)
+        }
+        ensureGitExcludeEntries(at: projectURL, entries: [relativeManifestPath])
     }
 
     public func syncClaudeProjectMCP(

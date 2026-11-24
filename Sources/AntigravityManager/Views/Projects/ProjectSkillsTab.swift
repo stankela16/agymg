@@ -170,7 +170,7 @@ public struct ProjectSkillsTab: View {
                 }
                 if isProjectEnabled {
                     ResourcePillBadge.linkedToProject
-                        .help("Linked to this project via .agents/skills/ and .claude/skills/")
+                        .help("Enabled for this project via .agents/skills.json and .claude/skills/")
                 }
             },
             actions: {

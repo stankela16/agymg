@@ -153,7 +153,7 @@ final class SyncEngineTests: XCTestCase {
             enabledPluginIds: []
         )
 
-        // 1. Sync with skill enabled -> Symlink must be created
+        // 1. Sync with skill enabled -> Discovery manifest must be created (no .agents/skills symlink)
         try await syncEngine.syncProject(
             project: project,
             allServers: [],
@@ -163,12 +163,20 @@ final class SyncEngineTests: XCTestCase {
 
         let projectSkillURL = projectURL.appendingPathComponent(".agents/skills/test-skill", isDirectory: true)
         let isLink = await syncEngine.isSymlink(at: projectSkillURL)
-        XCTAssertTrue(isLink, "Project skill must be created as a symbolic link")
+        XCTAssertFalse(isLink, "Project skill must NOT be created as a symlink in .agents/skills")
 
-        let symlinkDest = try fm.destinationOfSymbolicLink(atPath: projectSkillURL.path)
-        XCTAssertEqual(symlinkDest, vaultSkillURL.path, "Symlink destination must match vault skill path")
+        let skillsManifestURL = projectURL.appendingPathComponent(".agents/skills.json")
+        XCTAssertTrue(fm.fileExists(atPath: skillsManifestURL.path), "Project skill must be registered in .agents/skills.json")
+        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projectURL), ["test-skill"])
 
-        // 2. Disable skill -> Symlink must be pruned without deleting vault source
+        let manifestData = try Data(contentsOf: skillsManifestURL)
+        let manifestJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let entries = try XCTUnwrap(manifestJSON["entries"] as? [[String: Any]])
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?["path"] as? String, vaultSkillsDir.resolvingSymlinksInPath().path)
+        XCTAssertEqual(entries.first?["include_only"] as? [String], ["test-skill"])
+
+        // 2. Disable skill -> Manifest must be removed without deleting vault source
         project.enabledSkillIds = []
         try await syncEngine.syncProject(
             project: project,
@@ -178,8 +186,8 @@ final class SyncEngineTests: XCTestCase {
         )
 
         XCTAssertFalse(
-            fm.fileExists(atPath: projectSkillURL.path),
-            "Project skill symlink must be removed when disabled"
+            fm.fileExists(atPath: skillsManifestURL.path),
+            "Project skills.json must be removed when no skills remain enabled"
         )
         XCTAssertTrue(
             fm.fileExists(atPath: vaultSkillURL.path),

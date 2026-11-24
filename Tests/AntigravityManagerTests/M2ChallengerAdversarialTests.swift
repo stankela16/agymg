@@ -121,10 +121,10 @@ final class M2ChallengerAdversarialTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: skillTargetURL.path), "Broken symlink target does not exist")
         XCTAssertNotNil(try? fm.destinationOfSymbolicLink(atPath: skillTargetURL.path), "Broken symlink inode exists")
 
-        // Step 2: Sync project with this skill ENABLED and a real source
-        let realSource1 = tempDir.appendingPathComponent("real-skill-1", isDirectory: true)
+        // Step 2: Sync project with this skill ENABLED in Vault -> broken symlink cleaned and registered in skills.json
+        let realSource1 = PathConstants.vaultSkillsDirectory.appendingPathComponent(skillId, isDirectory: true)
         try fm.createDirectory(at: realSource1, withIntermediateDirectories: true)
-        try "name: real1".write(to: realSource1.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try "---\nname: real1\n---\n".write(to: realSource1.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
         var skillDef = SkillDefinition(
             id: skillId,
@@ -132,7 +132,7 @@ final class M2ChallengerAdversarialTests: XCTestCase {
             description: "Testing broken symlink revival",
             category: "test",
             path: realSource1.path,
-            origin: .projectLocal
+            origin: .vault
         )
 
         var project = ProjectProfile(
@@ -142,15 +142,17 @@ final class M2ChallengerAdversarialTests: XCTestCase {
             enabledSkillIds: [skillId]
         )
 
-        // Must replace broken symlink without EEXIST
+        let manifestURL = projectDir.appendingPathComponent(".agents/skills.json")
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
-        XCTAssertTrue(fm.fileExists(atPath: skillTargetURL.path), "Broken symlink must be revived to realSource1")
-        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: skillTargetURL.path), realSource1.path)
+        XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: skillTargetURL.path), "Broken symlink must be cleaned up")
+        XCTAssertTrue(fm.fileExists(atPath: manifestURL.path), "Skill must be registered in .agents/skills.json")
+        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projectDir), [skillId])
 
-        // Step 3: Re-pointing to another source
+        // Step 3: Re-pointing to another source outside Vault
+        try fm.removeItem(at: realSource1)
         let realSource2 = tempDir.appendingPathComponent("real-skill-2", isDirectory: true)
         try fm.createDirectory(at: realSource2, withIntermediateDirectories: true)
-        try "name: real2".write(to: realSource2.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try "---\nname: real2\n---\n".write(to: realSource2.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
         skillDef = SkillDefinition(
             id: skillId,
@@ -162,21 +164,19 @@ final class M2ChallengerAdversarialTests: XCTestCase {
         )
 
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
-        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: skillTargetURL.path), realSource2.path, "Symlink must be re-pointed to realSource2")
+        let repointedData = try Data(contentsOf: manifestURL)
+        let repointedJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: repointedData) as? [String: Any])
+        let repointedEntries = try XCTUnwrap(repointedJSON["entries"] as? [[String: Any]])
+        XCTAssertEqual(repointedEntries.count, 1)
+        XCTAssertEqual(repointedEntries.first?["path"] as? String, realSource2.resolvingSymlinksInPath().path)
 
-        // Step 4: Disabling skill when link is broken
-        // Simulate realSource2 getting deleted, leaving a broken symlink
+        // Step 4: Disabling skill when external source was deleted on disk
         try fm.removeItem(at: realSource2)
-        XCTAssertFalse(fm.fileExists(atPath: skillTargetURL.path), "Symlink is now broken again")
-        XCTAssertNotNil(try? fm.destinationOfSymbolicLink(atPath: skillTargetURL.path))
-
-        // Sync with skill disabled
         project.enabledSkillIds.remove(skillId)
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
 
-        // Dead symlink must be cleanly removed
-        XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: skillTargetURL.path), "Disabling skill must remove broken symlink")
-        XCTAssertFalse(fm.fileExists(atPath: skillTargetURL.path))
+        // Manifest entry and empty manifest file must be cleanly removed
+        XCTAssertFalse(fm.fileExists(atPath: manifestURL.path), "Disabling skill must remove empty skills.json")
     }
 
     // MARK: - Challenge 3: Broken Symlinks Completely Removed in Purge Flows

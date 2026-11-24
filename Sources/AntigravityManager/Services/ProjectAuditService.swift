@@ -212,17 +212,32 @@ public struct ProjectAuditService: Sendable {
 
     public func auditSymlinks(project: ProjectProfile) -> ProjectSafetyAudit.AuditItem {
         let projectURL = URL(fileURLWithPath: project.path)
-        let skillsDir = projectURL.appendingPathComponent(".agents/skills", isDirectory: true)
 
         var brokenLinks: [String] = []
-        if fileManager.fileExists(atPath: skillsDir.path) {
-            if let files = try? fileManager.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: nil) {
+        for relDir in [".agents/skills", ".agents/plugins"] {
+            let dir = projectURL.appendingPathComponent(relDir, isDirectory: true)
+            if fileManager.fileExists(atPath: dir.path),
+               let files = try? fileManager.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
                 for file in files {
-                    if (try? fileManager.destinationOfSymbolicLink(atPath: file.path)) != nil {
-                        if !fileManager.fileExists(atPath: file.path) {
-                            brokenLinks.append(file.lastPathComponent)
-                        }
+                    if (try? fileManager.destinationOfSymbolicLink(atPath: file.path)) != nil,
+                       !fileManager.fileExists(atPath: file.path) {
+                        brokenLinks.append(file.lastPathComponent)
                     }
+                }
+            }
+        }
+
+        for relManifest in [".agents/skills.json", ".agents/plugins.json"] {
+            let manifestURL = projectURL.appendingPathComponent(relManifest)
+            if fileManager.fileExists(atPath: manifestURL.path) {
+                guard let data = try? Data(contentsOf: manifestURL),
+                      (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) != nil else {
+                    return ProjectSafetyAudit.AuditItem(
+                        id: "symlinks",
+                        title: "Asset Symlinks",
+                        detail: "\(relManifest) contains invalid JSON",
+                        status: .failed
+                    )
                 }
             }
         }
@@ -239,7 +254,7 @@ public struct ProjectAuditService: Sendable {
         return ProjectSafetyAudit.AuditItem(
             id: "symlinks",
             title: "Asset Symlinks",
-            detail: "All symlinks valid and isolated",
+            detail: "All manifests and symlinks valid",
             status: .passed
         )
     }

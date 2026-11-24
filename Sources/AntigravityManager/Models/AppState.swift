@@ -797,6 +797,7 @@ public final class AppState {
                     }
                 }
             }
+            proj.enabledPluginIds.formUnion(SyncEngine.readManifestPluginIds(at: canonicalURL))
 
             // Scan local skills in the newly imported project
             let skillsDir = canonicalURL.appendingPathComponent(".agents/skills", isDirectory: true)
@@ -807,6 +808,7 @@ public final class AppState {
                     proj.enabledSkillIds.insert(skillName)
                 }
             }
+            proj.enabledSkillIds.formUnion(SyncEngine.readManifestSkillIds(at: canonicalURL))
 
             let localSkills = sScanner.scanProjectLocalSkills(projectPath: path)
             let audit = aService.audit(project: proj)
