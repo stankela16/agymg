@@ -160,7 +160,7 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
         let restoredSecret = try String(contentsOf: vaultPluginDir.appendingPathComponent("secret.txt"), encoding: .utf8)
         XCTAssertEqual(restoredSecret, "CONFIDENTIAL_KEY_XYZ")
 
-        // Enable the Vault-backed plugin on a second workspace and verify .agents/plugins.json manifest creation
+        // Enable the Vault-backed plugin on a second workspace and verify managed local copy creation
         let consumerDir = testSandboxDir.appendingPathComponent("Projects/SafeSyncConsumer", isDirectory: true)
         try fm.createDirectory(at: consumerDir, withIntermediateDirectories: true)
         let consumerPluginURL = consumerDir.appendingPathComponent(".agents/plugins/safe-plugin")
@@ -176,14 +176,11 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
 
         let isSym = await syncEngine.isSymlink(at: consumerPluginURL)
         XCTAssertFalse(isSym, "Enabled plugin in consumer project must NOT be symlinked in .agents/plugins")
+        XCTAssertTrue(SyncEngine.isManagedCopy(at: consumerPluginURL), "Enabled plugin must be copied into .agents/plugins as a managed copy")
+        let copiedSecret = try String(contentsOf: consumerPluginURL.appendingPathComponent("secret.txt"), encoding: .utf8)
+        XCTAssertEqual(copiedSecret, "CONFIDENTIAL_KEY_XYZ")
         let pluginsManifestURL = consumerDir.appendingPathComponent(".agents/plugins.json")
-        XCTAssertTrue(fm.fileExists(atPath: pluginsManifestURL.path), "Enabled plugin must be written to .agents/plugins.json")
-        XCTAssertEqual(SyncEngine.readManifestPluginIds(at: consumerDir), ["safe-plugin"])
-        let pluginsData = try Data(contentsOf: pluginsManifestURL)
-        let pluginsJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: pluginsData) as? [String: Any])
-        let entries = try XCTUnwrap(pluginsJSON["entries"] as? [[String: Any]])
-        XCTAssertEqual(entries.first?["path"] as? String, vaultPluginDir.resolvingSymlinksInPath().deletingLastPathComponent().path)
-        XCTAssertEqual(entries.first?["include_only"] as? [String], ["safe-plugin"])
+        XCTAssertFalse(fm.fileExists(atPath: pluginsManifestURL.path), "Vault plugins must not be written to .agents/plugins.json")
     }
 
     // MARK: - 4. Skill Deduplication

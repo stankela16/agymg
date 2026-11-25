@@ -62,9 +62,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-BIN_PATH=".build/${HOST_ARCH}-apple-macosx/$CONF/$APP_NAME"
+BIN_DIR=$(swift build --disable-sandbox -c "$CONF" --arch "$HOST_ARCH" --show-bin-path)
+BIN_PATH="$BIN_DIR/$APP_NAME"
 if [[ ! -f "$BIN_PATH" ]]; then
   BIN_PATH=".build/$CONF/$APP_NAME"
+fi
+if [[ ! -f "$BIN_PATH" ]]; then
+  BIN_PATH=".build/${HOST_ARCH}-apple-macosx/$CONF/$APP_NAME"
 fi
 
 cp "$BIN_PATH" "$APP/Contents/MacOS/$APP_NAME"
@@ -80,7 +84,8 @@ if [[ -d "$RESOURCE_DIR" ]]; then
 fi
 
 # SwiftPM resource bundles (direct glob loop safe under bash 3.2 set -u)
-for bundle in ".build/${HOST_ARCH}-apple-macosx/$CONF/"*.bundle ".build/$CONF/"*.bundle; do
+BUNDLE_DIR=$(dirname "$BIN_PATH")
+for bundle in "$BUNDLE_DIR/"*.bundle; do
   if [[ -d "$bundle" ]]; then
     bundle_name=$(basename "$bundle")
     rm -rf "$APP/Contents/Resources/$bundle_name"

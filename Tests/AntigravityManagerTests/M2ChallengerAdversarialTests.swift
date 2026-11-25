@@ -145,8 +145,10 @@ final class M2ChallengerAdversarialTests: XCTestCase {
         let manifestURL = projectDir.appendingPathComponent(".agents/skills.json")
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
         XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: skillTargetURL.path), "Broken symlink must be cleaned up")
-        XCTAssertTrue(fm.fileExists(atPath: manifestURL.path), "Skill must be registered in .agents/skills.json")
-        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projectDir), [skillId])
+        XCTAssertTrue(SyncEngine.isManagedCopy(at: skillTargetURL), "Skill must be copied into .agents/skills as a managed copy")
+        let copied1 = try String(contentsOf: skillTargetURL.appendingPathComponent("SKILL.md"), encoding: .utf8)
+        XCTAssertTrue(copied1.contains("name: real1"))
+        XCTAssertFalse(fm.fileExists(atPath: manifestURL.path))
 
         // Step 3: Re-pointing to another source outside Vault
         try fm.removeItem(at: realSource1)
@@ -164,19 +166,18 @@ final class M2ChallengerAdversarialTests: XCTestCase {
         )
 
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
-        let repointedData = try Data(contentsOf: manifestURL)
-        let repointedJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: repointedData) as? [String: Any])
-        let repointedEntries = try XCTUnwrap(repointedJSON["entries"] as? [[String: Any]])
-        XCTAssertEqual(repointedEntries.count, 1)
-        XCTAssertEqual(repointedEntries.first?["path"] as? String, realSource2.resolvingSymlinksInPath().path)
+        XCTAssertTrue(SyncEngine.isManagedCopy(at: skillTargetURL))
+        let copied2 = try String(contentsOf: skillTargetURL.appendingPathComponent("SKILL.md"), encoding: .utf8)
+        XCTAssertTrue(copied2.contains("name: real2"), "Managed copy must refresh when source changes")
 
         // Step 4: Disabling skill when external source was deleted on disk
         try fm.removeItem(at: realSource2)
         project.enabledSkillIds.remove(skillId)
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
 
-        // Manifest entry and empty manifest file must be cleanly removed
-        XCTAssertFalse(fm.fileExists(atPath: manifestURL.path), "Disabling skill must remove empty skills.json")
+        // Managed copy must be cleanly removed
+        XCTAssertFalse(fm.fileExists(atPath: skillTargetURL.path), "Disabling skill must remove managed copy")
+        XCTAssertFalse(fm.fileExists(atPath: manifestURL.path))
     }
 
     // MARK: - Challenge 3: Broken Symlinks Completely Removed in Purge Flows

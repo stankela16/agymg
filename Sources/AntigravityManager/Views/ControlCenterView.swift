@@ -41,7 +41,7 @@ public struct ControlCenterView: View {
             minHeight: DesignTokens.Dimensions.windowMinHeight
         )
         .sheet(item: $editingSkill) { skill in
-            SkillEditorSheet(skill: skill) { _ in state.reloadSkills() }
+            SkillEditorSheet(skill: skill) { _ in state.reloadSkills(syncUpdatedSkillId: skill.id) }
         }
         .alert(item: $deletionTarget) { target in
             deletionAlert(for: target)
@@ -80,7 +80,7 @@ public struct ControlCenterView: View {
             SystemBuiltinsView(state: state, editingSkill: $editingSkill)
         case .skillEditor:
             if let first = state.skills.first ?? state.builtinSkills.first {
-                SkillEditorSheet(skill: first) { _ in state.reloadSkills() }
+                SkillEditorSheet(skill: first) { _ in state.reloadSkills(syncUpdatedSkillId: first.id) }
             } else {
                 Text("No skills available to edit.").foregroundStyle(DesignTokens.inkTertiary)
             }

@@ -65,6 +65,10 @@ public struct SkillScannerService: Sendable {
                     continue
                 }
 
+                if SyncEngine.isManagedCopy(at: folderURL) {
+                    continue
+                }
+
                 let resolved = folderURL.resolvingSymlinksInPath().path
                 if resolved.hasPrefix(vaultResolved) || resolved.hasPrefix(globalResolved) {
                     continue

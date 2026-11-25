@@ -227,17 +227,29 @@ public struct ProjectAuditService: Sendable {
             }
         }
 
+        var staleManifestWarnings: [String] = []
         for relManifest in [".agents/skills.json", ".agents/plugins.json"] {
             let manifestURL = projectURL.appendingPathComponent(relManifest)
             if fileManager.fileExists(atPath: manifestURL.path) {
                 guard let data = try? Data(contentsOf: manifestURL),
-                      (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) != nil else {
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                     return ProjectSafetyAudit.AuditItem(
                         id: "symlinks",
                         title: "Asset Symlinks",
                         detail: "\(relManifest) contains invalid JSON",
                         status: .failed
                     )
+                }
+                if let entries = json["entries"] as? [[String: Any]] {
+                    let hasVaultEscape = entries.contains { entry in
+                        guard let rawPath = entry["path"] as? String else { return false }
+                        let resolved = SyncEngine.canonicalPathString(rawPath, relativeTo: projectURL)
+                        return SyncEngine.isPathInsideVault(resolved)
+                            || (rawPath.hasPrefix("/") && SyncEngine.isPathInsideVault(rawPath))
+                    }
+                    if hasVaultEscape {
+                        staleManifestWarnings.append(relManifest)
+                    }
                 }
             }
         }
@@ -251,10 +263,19 @@ public struct ProjectAuditService: Sendable {
             )
         }
 
+        if !staleManifestWarnings.isEmpty {
+            return ProjectSafetyAudit.AuditItem(
+                id: "symlinks",
+                title: "Asset Symlinks",
+                detail: "Out-of-workspace Vault paths in \(staleManifestWarnings.joined(separator: ", ")) (sync required)",
+                status: .warning
+            )
+        }
+
         return ProjectSafetyAudit.AuditItem(
             id: "symlinks",
             title: "Asset Symlinks",
-            detail: "All manifests and symlinks valid",
+            detail: "All workspace assets and manifests valid",
             status: .passed
         )
     }

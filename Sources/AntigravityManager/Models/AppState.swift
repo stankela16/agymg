@@ -627,7 +627,7 @@ public final class AppState {
         self.driftIssues = drift
     }
 
-    public func reloadSkills() {
+    public func reloadSkills(syncUpdatedSkillId: String? = nil) {
         let scanner = self.skillScanner
         let aService = self.projectAuditService
         let curProjects = self.projects
@@ -648,6 +648,11 @@ public final class AppState {
             self.projectLocalSkills = localSkillsDict
             self.projectSafetyAudits = auditsDict
             await self.refreshAllRecommendations()
+            if let skillId = syncUpdatedSkillId {
+                for proj in self.projects where proj.enabledSkillIds.contains(skillId) {
+                    self.triggerProjectSync(project: proj, debounceNanoseconds: 150_000_000)
+                }
+            }
         }
     }
 

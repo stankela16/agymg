@@ -1235,7 +1235,7 @@ public enum CLIRunner {
             for skillFolder in skillFolders where !skillFolder.lastPathComponent.hasPrefix(".") {
                 let skillName = skillFolder.lastPathComponent
                 guard PathConstants.isSafeResourceId(skillName) else { continue }
-                if (try? fm.destinationOfSymbolicLink(atPath: skillFolder.path)) != nil {
+                if (try? fm.destinationOfSymbolicLink(atPath: skillFolder.path)) != nil || SyncEngine.isManagedCopy(at: skillFolder) {
                     ephemeral.enabledSkillIds.insert(skillName)
                 }
             }

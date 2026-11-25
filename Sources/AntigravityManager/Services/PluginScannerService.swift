@@ -83,7 +83,7 @@ public struct PluginScannerService: Sendable {
             let isSymlink = (try? fm.destinationOfSymbolicLink(atPath: item.path)) != nil
                 || (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
 
-            guard !isSymlink else {
+            guard !isSymlink, !SyncEngine.isManagedCopy(at: item) else {
                 continue
             }
 
@@ -164,7 +164,7 @@ public struct PluginScannerService: Sendable {
         }
         for project in projects {
             let projectPlugins = scanProjectPlugins(projectPath: project.path)
-            for p in projectPlugins where p.id != "agy-manager" {
+            for p in projectPlugins where p.id != "agy-manager" && !SyncEngine.isManagedCopy(at: URL(fileURLWithPath: p.path)) {
                 if !all.contains(where: { $0.id == p.id }) {
                     all.append(p)
                 }

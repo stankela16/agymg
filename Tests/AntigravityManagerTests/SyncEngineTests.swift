@@ -153,7 +153,7 @@ final class SyncEngineTests: XCTestCase {
             enabledPluginIds: []
         )
 
-        // 1. Sync with skill enabled -> Discovery manifest must be created (no .agents/skills symlink)
+        // 1. Sync with skill enabled -> Workspace-local managed copy must be created (no symlink)
         try await syncEngine.syncProject(
             project: project,
             allServers: [],
@@ -164,19 +164,13 @@ final class SyncEngineTests: XCTestCase {
         let projectSkillURL = projectURL.appendingPathComponent(".agents/skills/test-skill", isDirectory: true)
         let isLink = await syncEngine.isSymlink(at: projectSkillURL)
         XCTAssertFalse(isLink, "Project skill must NOT be created as a symlink in .agents/skills")
+        XCTAssertTrue(SyncEngine.isManagedCopy(at: projectSkillURL), "Project skill must be created as a managed local copy")
+        XCTAssertTrue(fm.fileExists(atPath: projectSkillURL.appendingPathComponent("SKILL.md").path))
 
         let skillsManifestURL = projectURL.appendingPathComponent(".agents/skills.json")
-        XCTAssertTrue(fm.fileExists(atPath: skillsManifestURL.path), "Project skill must be registered in .agents/skills.json")
-        XCTAssertEqual(SyncEngine.readManifestSkillIds(at: projectURL), ["test-skill"])
+        XCTAssertFalse(fm.fileExists(atPath: skillsManifestURL.path), "Vault skills must not be written to .agents/skills.json")
 
-        let manifestData = try Data(contentsOf: skillsManifestURL)
-        let manifestJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
-        let entries = try XCTUnwrap(manifestJSON["entries"] as? [[String: Any]])
-        XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries.first?["path"] as? String, vaultSkillsDir.resolvingSymlinksInPath().path)
-        XCTAssertEqual(entries.first?["include_only"] as? [String], ["test-skill"])
-
-        // 2. Disable skill -> Manifest must be removed without deleting vault source
+        // 2. Disable skill -> Managed copy must be removed without deleting vault source
         project.enabledSkillIds = []
         try await syncEngine.syncProject(
             project: project,
@@ -186,8 +180,8 @@ final class SyncEngineTests: XCTestCase {
         )
 
         XCTAssertFalse(
-            fm.fileExists(atPath: skillsManifestURL.path),
-            "Project skills.json must be removed when no skills remain enabled"
+            fm.fileExists(atPath: projectSkillURL.path),
+            "Managed project skill copy must be removed when disabled"
         )
         XCTAssertTrue(
             fm.fileExists(atPath: vaultSkillURL.path),

@@ -138,14 +138,11 @@ final class M2FileSystemIntegrityTests: XCTestCase {
 
         try await syncEngine.syncProject(project: project, allServers: [], allSkills: [skillDef], allPlugins: [])
 
-        // Dead symlink must be removed and skill registered in .agents/skills.json
+        // Dead symlink must be removed and replaced with a workspace-local managed copy
         XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: targetSkillURL.path))
+        XCTAssertTrue(SyncEngine.isManagedCopy(at: targetSkillURL))
         let skillsManifestURL = projectDir.appendingPathComponent(".agents/skills.json")
-        XCTAssertTrue(fm.fileExists(atPath: skillsManifestURL.path))
-        let manifestData = try Data(contentsOf: skillsManifestURL)
-        let manifestJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
-        let entries = try XCTUnwrap(manifestJSON["entries"] as? [[String: Any]])
-        XCTAssertEqual(entries.first?["path"] as? String, realSourceDir.resolvingSymlinksInPath().path)
+        XCTAssertFalse(fm.fileExists(atPath: skillsManifestURL.path))
     }
 
     // MARK: - FS4: Physical Directory Handling in Global Skills

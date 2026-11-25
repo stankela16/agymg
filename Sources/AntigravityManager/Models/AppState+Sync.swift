@@ -322,7 +322,7 @@ extension AppState {
                 category: .project,
                 targetName: currentProject.name,
                 message: "Synchronized '\(currentProject.name)' (\(currentProject.enabledMCPServerIds.count) MCPs, \(currentProject.enabledSkillIds.count) skills, \(currentProject.enabledPluginIds.count) plugins)",
-                details: "Updated .agents/skills.json, .agents/plugins.json, and .agents/plugins/agy-manager at \(currentProject.path)",
+                details: "Updated .agents/skills/, .agents/plugins/, and .agents/plugins/agy-manager at \(currentProject.path)",
                 duration: duration
             )
             await self.refreshSafetyAudit(for: currentProject)

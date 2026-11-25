@@ -105,7 +105,7 @@ public struct ProjectPluginsTab: View {
                 }
                 if isProjectEnabled {
                     ResourcePillBadge.linkedToProject
-                        .help("Enabled in \(projectName)/.agents/plugins.json")
+                        .help("Synced in \(projectName)/.agents/plugins/")
                 }
             },
             actions: {
@@ -132,7 +132,7 @@ public struct ProjectPluginsTab: View {
                         ))
                         .labelsHidden()
                         .toggleStyle(.switch)
-                        .help(isProjectEnabled ? "Remove plugin from \(projectName)/.agents/plugins.json" : "Enable plugin in \(projectName)/.agents/plugins.json")
+                        .help(isProjectEnabled ? "Remove plugin from \(projectName)/.agents/plugins/" : "Enable plugin in \(projectName)/.agents/plugins/")
                     }
                 }
             }

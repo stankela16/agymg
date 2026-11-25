@@ -118,8 +118,10 @@ extension SyncEngine {
         for project in allProjects {
             let projectURL = URL(fileURLWithPath: project.path)
             let projectSkillURL = projectURL.appendingPathComponent(".agents/skills/\(id)")
-            if isSymlink(at: projectSkillURL) {
+            var removedExcludes: Set<String> = []
+            if isSymlink(at: projectSkillURL) || Self.isManagedCopy(at: projectSkillURL) {
                 try? fm.removeItem(at: projectSkillURL)
+                removedExcludes.insert(".agents/skills/\(id)")
             }
             removeResourceFromManifest(
                 id: id,
@@ -130,7 +132,9 @@ extension SyncEngine {
             let claudeProjectSkillURL = projectURL.appendingPathComponent(".claude/skills/\(id)")
             if isSymlink(at: claudeProjectSkillURL) {
                 try? fm.removeItem(at: claudeProjectSkillURL)
+                removedExcludes.insert(".claude/skills/\(id)")
             }
+            removeGitExcludeEntries(at: projectURL, entries: removedExcludes)
         }
     }
 
@@ -161,8 +165,10 @@ extension SyncEngine {
         for project in allProjects {
             let projectURL = URL(fileURLWithPath: project.path)
             let projectPluginURL = projectURL.appendingPathComponent(".agents/plugins/\(id)")
-            if isSymlink(at: projectPluginURL) {
+            var removedExcludes: Set<String> = []
+            if isSymlink(at: projectPluginURL) || Self.isManagedCopy(at: projectPluginURL) {
                 try? fm.removeItem(at: projectPluginURL)
+                removedExcludes.insert(".agents/plugins/\(id)")
             }
             removeResourceFromManifest(
                 id: id,
@@ -178,10 +184,12 @@ extension SyncEngine {
                         let absDest = URL(fileURLWithPath: dest, relativeTo: item.deletingLastPathComponent()).standardizedFileURL.path
                         if absDest.hasPrefix(vaultPluginPrefix) {
                             try? fm.removeItem(at: item)
+                            removedExcludes.insert(".claude/skills/\(item.lastPathComponent)")
                         }
                     }
                 }
             }
+            removeGitExcludeEntries(at: projectURL, entries: removedExcludes)
         }
     }
 
@@ -366,10 +374,17 @@ extension SyncEngine {
             for relDir in [".agents/skills", ".claude/skills", ".agents/plugins"] {
                 let targetDir = projURL.appendingPathComponent(relDir, isDirectory: true)
                 guard let entries = try? fm.contentsOfDirectory(at: targetDir, includingPropertiesForKeys: nil) else { continue }
-                for entry in entries where vaultDestination(for: entry) != nil {
-                    if (try? fm.removeItem(at: entry)) != nil {
-                        summary.removedProjectSymlinks.append(entry.path)
-                        removedExcludeEntries.insert("\(relDir)/\(entry.lastPathComponent)")
+                for entry in entries {
+                    if vaultDestination(for: entry) != nil {
+                        if (try? fm.removeItem(at: entry)) != nil {
+                            summary.removedProjectSymlinks.append(entry.path)
+                            removedExcludeEntries.insert("\(relDir)/\(entry.lastPathComponent)")
+                        }
+                    } else if Self.isManagedCopy(at: entry) {
+                        if (try? fm.removeItem(at: entry)) != nil {
+                            summary.removedProjectWrappers.append(entry.path)
+                            removedExcludeEntries.insert("\(relDir)/\(entry.lastPathComponent)")
+                        }
                     }
                 }
             }

@@ -220,7 +220,7 @@ public actor VaultService {
             for project in discoveredProjects {
                 let pluginsDir = URL(fileURLWithPath: project.path).appendingPathComponent(".agents/plugins", isDirectory: true)
                 if let pluginDirs = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
-                    for pluginDir in pluginDirs {
+                    for pluginDir in pluginDirs where !SyncEngine.isManagedCopy(at: pluginDir) {
                         let mcpFile = pluginDir.appendingPathComponent("mcp_config.json")
                         if let data = try? Data(contentsOf: mcpFile),
                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -324,10 +324,10 @@ public actor VaultService {
         for project in projects {
             let projectURL = URL(fileURLWithPath: project.path)
 
-            // Scan .agents/plugins/*/mcp_config.json
+            // Scan .agents/plugins/*/mcp_config.json (skip agymg-managed plugin copies)
             let pluginsDir = projectURL.appendingPathComponent(".agents/plugins", isDirectory: true)
             if let pluginDirs = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
-                for pluginDir in pluginDirs {
+                for pluginDir in pluginDirs where !SyncEngine.isManagedCopy(at: pluginDir) {
                     let mcpFile = pluginDir.appendingPathComponent("mcp_config.json")
                     extractServers(from: mcpFile, into: &masterServers, didAdd: &didAdd)
                 }
