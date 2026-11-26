@@ -632,7 +632,10 @@ final class V1_0_1AuditRegressionTests: XCTestCase {
         let selection = await vault.loadGlobalSelection()
         XCTAssertTrue(selection.enabledPluginIds.contains("starter-plugin"))
         let servers = await vault.loadServers()
-        XCTAssertTrue(servers.contains(where: { $0.id == "bundled-srv" }))
+        XCTAssertFalse(
+            servers.contains(where: { $0.id == "bundled-srv" }),
+            "Plugin-bundled MCP must stay inside starter-plugin instead of duplicating into master_mcp.json"
+        )
 
         // Simulate upgrading from v1.0.0 where Vault manifests had 0o644 permissions
         try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: PathConstants.vaultMCPFile.path)

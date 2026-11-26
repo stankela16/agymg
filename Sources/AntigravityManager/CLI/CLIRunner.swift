@@ -71,8 +71,39 @@ public struct CLISetResponse: Codable, Sendable, Equatable {
     public let enabledPlugins: [String]
     public let disabledPlugins: [String]
     public let unknownIds: [String]
+    public let skippedDuplicateMCPs: [String]
     public let requiresSessionReloadForMCP: Bool
     public let message: String
+
+    public init(
+        scope: String,
+        targetId: String,
+        targetPath: String?,
+        enabledMCPs: [String],
+        disabledMCPs: [String],
+        enabledSkills: [String],
+        disabledSkills: [String],
+        enabledPlugins: [String],
+        disabledPlugins: [String],
+        unknownIds: [String],
+        skippedDuplicateMCPs: [String] = [],
+        requiresSessionReloadForMCP: Bool,
+        message: String
+    ) {
+        self.scope = scope
+        self.targetId = targetId
+        self.targetPath = targetPath
+        self.enabledMCPs = enabledMCPs
+        self.disabledMCPs = disabledMCPs
+        self.enabledSkills = enabledSkills
+        self.disabledSkills = disabledSkills
+        self.enabledPlugins = enabledPlugins
+        self.disabledPlugins = disabledPlugins
+        self.unknownIds = unknownIds
+        self.skippedDuplicateMCPs = skippedDuplicateMCPs
+        self.requiresSessionReloadForMCP = requiresSessionReloadForMCP
+        self.message = message
+    }
 }
 
 public enum CLIRunner {
@@ -289,6 +320,7 @@ public enum CLIRunner {
         let servers = await vault.loadServersReadOnly()
         let globalSelection = await vault.loadGlobalSelection()
         let skills = SkillScannerService().scanVaultSkills(readOnly: true)
+        let plugins = PluginScannerService().scanAllPlugins(projects: [], readOnly: true)
         var projects = await vault.loadSavedProjectsWithoutTCC(allowingCWD: requestedPath)
 
         if let requestedPath {
@@ -302,7 +334,9 @@ public enum CLIRunner {
             globalServerIds: globalSelection.enabledMCPServerIds,
             skills: skills,
             globalSkillIds: globalSelection.enabledSkillIds,
-            projects: projects
+            projects: projects,
+            plugins: plugins,
+            globalPluginIds: globalSelection.enabledPluginIds
         )
 
         if outputJSON {
@@ -564,22 +598,57 @@ public enum CLIRunner {
             return false
         }
 
+        let serverMap = Dictionary(uniqueKeysWithValues: allServers.map { ($0.id, $0) })
         let pluginHasMCP = Set(allPlugins.filter(\.hasMCP).map(\.id))
         let touchedMCPViaPlugin = !(Set(validEnablePlugin + validDisablePlugin).intersection(pluginHasMCP).isEmpty)
-        let requiresReload = !validEnableMCP.isEmpty || !validDisableMCP.isEmpty || touchedMCPViaPlugin
 
         if isGlobal {
             var selection = await vault.loadGlobalSelection()
-            selection.enabledMCPServerIds.formUnion(validEnableMCP)
-            selection.enabledMCPServerIds.subtract(validDisableMCP)
             selection.enabledSkillIds.formUnion(validEnableSkill)
             selection.enabledSkillIds.subtract(validDisableSkill)
             selection.enabledPluginIds.formUnion(validEnablePlugin)
             selection.enabledPluginIds.subtract(validDisablePlugin)
 
+            let bundledIndex = PluginScannerService.bundledMCPIndex(
+                for: allPlugins,
+                enabledPluginIds: selection.enabledPluginIds
+            )
+            var skippedDuplicateMCPs: [String] = []
+            var effectiveEnableMCP: [String] = []
+            for id in validEnableMCP {
+                if let ownerPlugin = bundledIndex.conflictingPluginId(for: id, server: serverMap[id]) {
+                    skippedDuplicateMCPs.append("\(id) (via plugin '\(ownerPlugin)')")
+                } else {
+                    effectiveEnableMCP.append(id)
+                }
+            }
+
+            selection.enabledMCPServerIds.formUnion(effectiveEnableMCP)
+            selection.enabledMCPServerIds.subtract(validDisableMCP)
+
+            var autoDisabledMCPs: [String] = []
+            for existingId in selection.enabledMCPServerIds.sorted() {
+                if let ownerPlugin = bundledIndex.conflictingPluginId(for: existingId, server: serverMap[existingId]) {
+                    selection.enabledMCPServerIds.remove(existingId)
+                    autoDisabledMCPs.append(existingId)
+                    let label = "\(existingId) (via plugin '\(ownerPlugin)')"
+                    if !skippedDuplicateMCPs.contains(label) {
+                        skippedDuplicateMCPs.append(label)
+                    }
+                }
+            }
+
+            let effectiveDisableMCP = validDisableMCP + autoDisabledMCPs.filter { !validDisableMCP.contains($0) }
+            let requiresReload = !effectiveEnableMCP.isEmpty || !effectiveDisableMCP.isEmpty || touchedMCPViaPlugin
+
             await vault.saveGlobalSelection(selection)
             do {
-                try await syncEngine.syncGlobalConfig(servers: allServers, enabledIds: selection.enabledMCPServerIds)
+                try await syncEngine.syncGlobalConfig(
+                    servers: allServers,
+                    enabledIds: selection.enabledMCPServerIds,
+                    allPlugins: allPlugins,
+                    enabledPluginIds: selection.enabledPluginIds
+                )
                 try await syncEngine.syncGlobalSkills(allSkills: allSkills, enabledSkillIds: selection.enabledSkillIds)
                 try await syncEngine.syncGlobalPlugins(allPlugins: allPlugins, enabledPluginIds: selection.enabledPluginIds)
             } catch {
@@ -592,23 +661,25 @@ public enum CLIRunner {
                 scope: "global",
                 targetId: "global",
                 targetPath: nil,
-                enabledMCPs: validEnableMCP,
-                disabledMCPs: validDisableMCP,
+                enabledMCPs: effectiveEnableMCP,
+                disabledMCPs: effectiveDisableMCP,
                 enabledSkills: validEnableSkill,
                 disabledSkills: validDisableSkill,
                 enabledPlugins: validEnablePlugin,
                 disabledPlugins: validDisablePlugin,
                 unknownIds: unknownIds,
+                skippedDuplicateMCPs: skippedDuplicateMCPs,
                 requiresSessionReloadForMCP: requiresReload,
                 message: buildSetSummaryMessage(
                     targetName: "Global Core",
-                    enabledMCP: validEnableMCP,
-                    disabledMCP: validDisableMCP,
+                    enabledMCP: effectiveEnableMCP,
+                    disabledMCP: effectiveDisableMCP,
                     enabledSkill: validEnableSkill,
                     disabledSkill: validDisableSkill,
                     enabledPlugin: validEnablePlugin,
                     disabledPlugin: validDisablePlugin,
                     unknownIds: unknownIds,
+                    skippedDuplicateMCPs: skippedDuplicateMCPs,
                     requiresReload: requiresReload
                 )
             )
@@ -622,12 +693,42 @@ public enum CLIRunner {
             let localSkillIds = Set(skillScanner.scanProjectLocalSkills(projectPath: targetProject.path).map(\.id))
             let filteredDisableSkill = validDisableSkill.filter { !localSkillIds.contains($0) }
 
-            targetProject.enabledMCPServerIds.formUnion(validEnableMCP)
-            targetProject.enabledMCPServerIds.subtract(validDisableMCP)
             targetProject.enabledSkillIds.formUnion(validEnableSkill)
             targetProject.enabledSkillIds.subtract(filteredDisableSkill)
             targetProject.enabledPluginIds.formUnion(validEnablePlugin)
             targetProject.enabledPluginIds.subtract(validDisablePlugin)
+
+            let bundledIndex = PluginScannerService.bundledMCPIndex(
+                for: allPlugins,
+                enabledPluginIds: targetProject.enabledPluginIds
+            )
+            var skippedDuplicateMCPs: [String] = []
+            var effectiveEnableMCP: [String] = []
+            for id in validEnableMCP {
+                if let ownerPlugin = bundledIndex.conflictingPluginId(for: id, server: serverMap[id]) {
+                    skippedDuplicateMCPs.append("\(id) (via plugin '\(ownerPlugin)')")
+                } else {
+                    effectiveEnableMCP.append(id)
+                }
+            }
+
+            targetProject.enabledMCPServerIds.formUnion(effectiveEnableMCP)
+            targetProject.enabledMCPServerIds.subtract(validDisableMCP)
+
+            var autoDisabledMCPs: [String] = []
+            for existingId in targetProject.enabledMCPServerIds.sorted() {
+                if let ownerPlugin = bundledIndex.conflictingPluginId(for: existingId, server: serverMap[existingId]) {
+                    targetProject.enabledMCPServerIds.remove(existingId)
+                    autoDisabledMCPs.append(existingId)
+                    let label = "\(existingId) (via plugin '\(ownerPlugin)')"
+                    if !skippedDuplicateMCPs.contains(label) {
+                        skippedDuplicateMCPs.append(label)
+                    }
+                }
+            }
+
+            let effectiveDisableMCP = validDisableMCP + autoDisabledMCPs.filter { !validDisableMCP.contains($0) }
+            let requiresReload = !effectiveEnableMCP.isEmpty || !effectiveDisableMCP.isEmpty || touchedMCPViaPlugin
 
             if isExistingInList, let idx = projects.firstIndex(where: { $0.id == targetProject.id || $0.path == targetProject.path }) {
                 projects[idx] = targetProject
@@ -668,23 +769,25 @@ public enum CLIRunner {
                 scope: "project",
                 targetId: targetProject.id,
                 targetPath: targetProject.path,
-                enabledMCPs: validEnableMCP,
-                disabledMCPs: validDisableMCP,
+                enabledMCPs: effectiveEnableMCP,
+                disabledMCPs: effectiveDisableMCP,
                 enabledSkills: validEnableSkill,
                 disabledSkills: filteredDisableSkill,
                 enabledPlugins: validEnablePlugin,
                 disabledPlugins: validDisablePlugin,
                 unknownIds: unknownIds,
+                skippedDuplicateMCPs: skippedDuplicateMCPs,
                 requiresSessionReloadForMCP: requiresReload,
                 message: buildSetSummaryMessage(
                     targetName: targetProject.name,
-                    enabledMCP: validEnableMCP,
-                    disabledMCP: validDisableMCP,
+                    enabledMCP: effectiveEnableMCP,
+                    disabledMCP: effectiveDisableMCP,
                     enabledSkill: validEnableSkill,
                     disabledSkill: filteredDisableSkill,
                     enabledPlugin: validEnablePlugin,
                     disabledPlugin: validDisablePlugin,
                     unknownIds: unknownIds,
+                    skippedDuplicateMCPs: skippedDuplicateMCPs,
                     requiresReload: requiresReload
                 )
             )
@@ -1215,16 +1318,17 @@ public enum CLIRunner {
             for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
                 let pluginName = pluginFolder.lastPathComponent
                 guard PathConstants.isSafeResourceId(pluginName) else { continue }
-                if pluginName != "agy-manager" {
-                    ephemeral.enabledPluginIds.insert(pluginName)
-                }
-                let mcpFile = pluginFolder.appendingPathComponent("mcp_config.json")
-                if let data = try? Data(contentsOf: mcpFile),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let servers = json["mcpServers"] as? [String: Any] {
-                    for key in servers.keys where PathConstants.isSafeResourceId(key) {
-                        ephemeral.enabledMCPServerIds.insert(key)
+                if pluginName == "agy-manager" {
+                    let mcpFile = pluginFolder.appendingPathComponent("mcp_config.json")
+                    if let data = try? Data(contentsOf: mcpFile),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let servers = json["mcpServers"] as? [String: Any] {
+                        for key in servers.keys where PathConstants.isSafeResourceId(key) {
+                            ephemeral.enabledMCPServerIds.insert(key)
+                        }
                     }
+                } else {
+                    ephemeral.enabledPluginIds.insert(pluginName)
                 }
             }
         }
@@ -1330,6 +1434,7 @@ public enum CLIRunner {
         enabledPlugin: [String],
         disabledPlugin: [String],
         unknownIds: [String],
+        skippedDuplicateMCPs: [String] = [],
         requiresReload: Bool
     ) -> String {
         var parts: [String] = []
@@ -1341,6 +1446,9 @@ public enum CLIRunner {
         if !disabledPlugin.isEmpty { parts.append("-Plugin: \(disabledPlugin.joined(separator: ", "))") }
 
         var msg = "Synchronized '\(targetName)': \(parts.joined(separator: " | "))."
+        if !skippedDuplicateMCPs.isEmpty {
+            msg += " Skipped/replaced duplicate standalone MCP(s) already provided by plugin(s): \(skippedDuplicateMCPs.joined(separator: ", "))."
+        }
         if !unknownIds.isEmpty {
             msg += " Unknown IDs in Vault: \(unknownIds.joined(separator: ", "))."
         }

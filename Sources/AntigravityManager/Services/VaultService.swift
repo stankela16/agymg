@@ -196,41 +196,26 @@ public actor VaultService {
                 }
                 if fm.fileExists(atPath: destURL.path) || isLink {
                     initialGlobalPluginIds.insert(pluginId)
-                    let pluginMCPFile = destURL.appendingPathComponent("mcp_config.json")
-                    if let data = try? Data(contentsOf: pluginMCPFile),
-                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let servers = json["mcpServers"] as? [String: Any] {
-                        for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) && masterServers[id] == nil {
-                            if let rawDict = rawValue as? [String: Any] {
-                                let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
-                                masterServers[id] = MCPServerDefinition(id: id, config: jsonDict)
-                            }
-                        }
-                    }
                 }
             }
         }
 
-        // 4. Discover servers from project plugins and project-scoped configs when authorized
+        // 4. Discover standalone project MCP servers from agy-manager wrappers when authorized
         if ProjectFolderAccessManager.shared.isAuthorized {
             let scanner = ProjectScannerService()
             let authorizedDir = ProjectFolderAccessManager.shared.authorizedDirectoryURL
             let discoveredProjects = scanner.discoverProjects(in: authorizedDir, scanDefaultWhenNil: false)
 
             for project in discoveredProjects {
-                let pluginsDir = URL(fileURLWithPath: project.path).appendingPathComponent(".agents/plugins", isDirectory: true)
-                if let pluginDirs = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
-                    for pluginDir in pluginDirs where !SyncEngine.isManagedCopy(at: pluginDir) {
-                        let mcpFile = pluginDir.appendingPathComponent("mcp_config.json")
-                        if let data = try? Data(contentsOf: mcpFile),
-                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let servers = json["mcpServers"] as? [String: Any] {
-                            for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
-                                if let rawDict = rawValue as? [String: Any], masterServers[id] == nil {
-                                    let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
-                                    masterServers[id] = MCPServerDefinition(id: id, config: jsonDict)
-                                }
-                            }
+                let agyMcpFile = URL(fileURLWithPath: project.path)
+                    .appendingPathComponent(".agents/plugins/agy-manager/mcp_config.json")
+                if let data = try? Data(contentsOf: agyMcpFile),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let servers = json["mcpServers"] as? [String: Any] {
+                    for (id, rawValue) in servers where PathConstants.isSafeResourceId(id) {
+                        if let rawDict = rawValue as? [String: Any], masterServers[id] == nil {
+                            let jsonDict = rawDict.mapValues { JSONValue(any: $0) }
+                            masterServers[id] = MCPServerDefinition(id: id, config: jsonDict)
                         }
                     }
                 }
@@ -320,18 +305,13 @@ public actor VaultService {
             }
         }
 
-        // 2. Scan projects
+        // 2. Scan projects (only standalone agy-manager wrappers and direct .agents/mcp_config.json;
+        // plugin-bundled MCP servers belong to their plugins and must not be duplicated into master_mcp.json)
         for project in projects {
             let projectURL = URL(fileURLWithPath: project.path)
 
-            // Scan .agents/plugins/*/mcp_config.json (skip agymg-managed plugin copies)
-            let pluginsDir = projectURL.appendingPathComponent(".agents/plugins", isDirectory: true)
-            if let pluginDirs = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
-                for pluginDir in pluginDirs where !SyncEngine.isManagedCopy(at: pluginDir) {
-                    let mcpFile = pluginDir.appendingPathComponent("mcp_config.json")
-                    extractServers(from: mcpFile, into: &masterServers, didAdd: &didAdd)
-                }
-            }
+            let agyMcpFile = projectURL.appendingPathComponent(".agents/plugins/agy-manager/mcp_config.json")
+            extractServers(from: agyMcpFile, into: &masterServers, didAdd: &didAdd)
 
             // Scan direct .agents/mcp_config.json
             let directMcpFile = projectURL.appendingPathComponent(".agents/mcp_config.json")

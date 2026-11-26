@@ -323,7 +323,9 @@ public struct MCPDiagnosticsService: Sendable {
         globalServerIds: Set<String>,
         skills: [SkillDefinition],
         globalSkillIds: Set<String>,
-        projects: [ProjectProfile]
+        projects: [ProjectProfile],
+        plugins: [PluginDefinition] = [],
+        globalPluginIds: Set<String> = []
     ) -> DriftReport {
         let fm = FileManager.default
         var issues: [DriftIssue] = []
@@ -468,6 +470,39 @@ public struct MCPDiagnosticsService: Sendable {
             }
         }
 
+        // 5. Duplicate MCP detection (standalone MCP overlapping an enabled plugin's bundled MCP)
+        if !plugins.isEmpty {
+            let serverMap = Dictionary(uniqueKeysWithValues: servers.map { ($0.id, $0) })
+
+            let globalBundled = PluginScannerService.bundledMCPIndex(for: plugins, enabledPluginIds: globalPluginIds)
+            for serverId in globalServerIds.sorted() {
+                if let ownerPlugin = globalBundled.conflictingPluginId(for: serverId, server: serverMap[serverId]) {
+                    issues.append(DriftIssue(
+                        id: "drift:duplicate-mcp:global:\(serverId)",
+                        scope: "global",
+                        target: "global:\(serverId)",
+                        detail: "Standalone MCP '\(serverId)' duplicates MCP bundled in enabled global plugin '\(ownerPlugin)'.",
+                        severity: .warning
+                    ))
+                }
+            }
+
+            for project in projects where !project.enabledMCPServerIds.isEmpty && !project.enabledPluginIds.isEmpty {
+                let projectBundled = PluginScannerService.bundledMCPIndex(for: plugins, enabledPluginIds: project.enabledPluginIds)
+                for serverId in project.enabledMCPServerIds.sorted() {
+                    if let ownerPlugin = projectBundled.conflictingPluginId(for: serverId, server: serverMap[serverId]) {
+                        issues.append(DriftIssue(
+                            id: "drift:duplicate-mcp:proj:\(project.id):\(serverId)",
+                            scope: "project:\(project.id)",
+                            target: "\(project.name):\(serverId)",
+                            detail: "Standalone MCP '\(serverId)' duplicates MCP bundled in enabled plugin '\(ownerPlugin)'.",
+                            severity: .warning
+                        ))
+                    }
+                }
+            }
+        }
+
         return DriftReport(issues: issues)
     }
 
@@ -476,7 +511,9 @@ public struct MCPDiagnosticsService: Sendable {
         globalServerIds: Set<String>,
         skills: [SkillDefinition],
         globalSkillIds: Set<String>,
-        projects: [ProjectProfile]
+        projects: [ProjectProfile],
+        plugins: [PluginDefinition] = [],
+        globalPluginIds: Set<String> = []
     ) -> CLIDoctorResponse {
         let serverMap = inspectAllServers(servers)
         let serverHealth = servers.compactMap { serverMap[$0.id] }.sorted { $0.serverId < $1.serverId }
@@ -485,7 +522,9 @@ public struct MCPDiagnosticsService: Sendable {
             globalServerIds: globalServerIds,
             skills: skills,
             globalSkillIds: globalSkillIds,
-            projects: projects
+            projects: projects,
+            plugins: plugins,
+            globalPluginIds: globalPluginIds
         )
 
         let auditService = ProjectAuditService()

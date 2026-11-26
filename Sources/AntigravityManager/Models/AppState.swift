@@ -609,6 +609,8 @@ public final class AppState {
         let curSkills = self.skills
         let curGlobalSk = self.globalSkillIds
         let curProjects = self.projects
+        let curPlugins = self.plugins
+        let curGlobalP = self.globalPluginIds
 
         let (healthMap, drift) = await Task.detached(priority: .utility) {
             let health = diag.inspectAllServers(curServers)
@@ -617,7 +619,9 @@ public final class AppState {
                 globalServerIds: curGlobalS,
                 skills: curSkills,
                 globalSkillIds: curGlobalSk,
-                projects: curProjects
+                projects: curProjects,
+                plugins: curPlugins,
+                globalPluginIds: curGlobalP
             )
             return (health, driftReport.issues)
         }.value
@@ -902,22 +906,23 @@ public final class AppState {
             var proj = ProjectProfile(id: uniqueId, name: name, path: path)
             let fm = FileManager.default
 
-            // Scan local plugins and MCP servers in the newly imported project
+            // Scan local plugins and standalone agy-manager MCP servers in the newly imported project
             let pluginsDir = canonicalURL.appendingPathComponent(".agents/plugins", isDirectory: true)
             if let pluginFolders = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
                 for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
                     let pluginName = pluginFolder.lastPathComponent
                     guard PathConstants.isSafeResourceId(pluginName) else { continue }
-                    if pluginName != "agy-manager" {
-                        proj.enabledPluginIds.insert(pluginName)
-                    }
-                    let mcpFile = pluginFolder.appendingPathComponent("mcp_config.json")
-                    if let data = try? Data(contentsOf: mcpFile),
-                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let servers = json["mcpServers"] as? [String: Any] {
-                        for serverKey in servers.keys where PathConstants.isSafeResourceId(serverKey) {
-                            proj.enabledMCPServerIds.insert(serverKey)
+                    if pluginName == "agy-manager" {
+                        let mcpFile = pluginFolder.appendingPathComponent("mcp_config.json")
+                        if let data = try? Data(contentsOf: mcpFile),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let servers = json["mcpServers"] as? [String: Any] {
+                            for serverKey in servers.keys where PathConstants.isSafeResourceId(serverKey) {
+                                proj.enabledMCPServerIds.insert(serverKey)
+                            }
                         }
+                    } else {
+                        proj.enabledPluginIds.insert(pluginName)
                     }
                 }
             }

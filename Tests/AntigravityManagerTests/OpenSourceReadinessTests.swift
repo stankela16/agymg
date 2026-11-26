@@ -324,10 +324,10 @@ final class OpenSourceReadinessTests: XCTestCase {
         let geminiDir = sandboxDir.appendingPathComponent(".gemini", isDirectory: true)
         PathConstants.customGeminiDirectory = geminiDir
 
-        // 2. Brand-new user authorizes workspace folder on Onboarding -> project MCP definitions must enter Master Vault
+        // 2. Brand-new user authorizes workspace folder on Onboarding -> project standalone MCP definitions must enter Master Vault
         let onboardingWorkspace = sandboxDir.appendingPathComponent("OnboardingRepos", isDirectory: true)
         let appRepo = onboardingWorkspace.appendingPathComponent("billing-api", isDirectory: true)
-        let pluginDir = appRepo.appendingPathComponent(".agents/plugins/custom-billing", isDirectory: true)
+        let pluginDir = appRepo.appendingPathComponent(".agents/plugins/agy-manager", isDirectory: true)
         try fm.createDirectory(at: pluginDir, withIntermediateDirectories: true)
         try #"{"mcpServers":{"stripe-scoped":{"command":"npx","args":["-y","@stripe/mcp"]}}}"#
             .write(to: pluginDir.appendingPathComponent("mcp_config.json"), atomically: true, encoding: .utf8)

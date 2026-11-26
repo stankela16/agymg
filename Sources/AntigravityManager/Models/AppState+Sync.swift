@@ -2,13 +2,26 @@ import Foundation
 
 extension AppState {
     // MARK: - Global Toggles
-    // MARK: - Global Toggles
     public func toggleGlobalServer(id: String) {
         let enabled: Bool
         if globalServerIds.contains(id) {
             globalServerIds.remove(id)
             enabled = false
         } else {
+            let server = servers.first(where: { $0.id == id })
+            let bundledIndex = PluginScannerService.bundledMCPIndex(
+                for: plugins,
+                enabledPluginIds: globalPluginIds
+            )
+            if let ownerPlugin = bundledIndex.conflictingPluginId(for: id, server: server) {
+                let pluginName = plugins.first(where: { $0.id == ownerPlugin })?.name ?? ownerPlugin
+                showPopoverFeedback(
+                    message: "Already provided by \(pluginName)",
+                    detail: "Disable global plugin '\(ownerPlugin)' first to enable standalone MCP",
+                    requiresChatReload: false
+                )
+                return
+            }
             globalServerIds.insert(id)
             enabled = true
         }
@@ -41,21 +54,36 @@ extension AppState {
 
     public func toggleGlobalPlugin(id: String) {
         let enabled: Bool
+        var replacedMCPs: [String] = []
         if globalPluginIds.contains(id) {
             globalPluginIds.remove(id)
             enabled = false
         } else {
             globalPluginIds.insert(id)
             enabled = true
+            let bundledIndex = PluginScannerService.bundledMCPIndex(for: plugins, enabledPluginIds: [id])
+            let serverMap = Dictionary(uniqueKeysWithValues: servers.map { ($0.id, $0) })
+            for serverId in globalServerIds.sorted() {
+                if bundledIndex.conflictingPluginId(for: serverId, server: serverMap[serverId]) != nil {
+                    globalServerIds.remove(serverId)
+                    replacedMCPs.append(serverId)
+                }
+            }
         }
         triggerSync(debounceNanoseconds: 250_000_000)
         let plugin = plugins.first(where: { $0.id == id })
         let name = plugin?.name ?? id
         let hasMCP = plugin?.hasMCP ?? false
+        let detail: String
+        if !replacedMCPs.isEmpty {
+            detail = "Replaced duplicate standalone MCP: \(replacedMCPs.joined(separator: ", "))"
+        } else {
+            detail = hasMCP ? "Skills active now · new chat for MCPs" : "Active immediately — no chat restart needed"
+        }
         showPopoverFeedback(
             message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
-            detail: hasMCP ? "Skills active now · new chat for MCPs" : "Active immediately — no chat restart needed",
-            requiresChatReload: hasMCP
+            detail: detail,
+            requiresChatReload: hasMCP || !replacedMCPs.isEmpty
         )
     }
 
@@ -158,6 +186,20 @@ extension AppState {
             projects[index].enabledMCPServerIds.remove(serverId)
             enabled = false
         } else {
+            let server = servers.first(where: { $0.id == serverId })
+            let bundledIndex = PluginScannerService.bundledMCPIndex(
+                for: plugins,
+                enabledPluginIds: projects[index].enabledPluginIds
+            )
+            if let ownerPlugin = bundledIndex.conflictingPluginId(for: serverId, server: server) {
+                let pluginName = plugins.first(where: { $0.id == ownerPlugin })?.name ?? ownerPlugin
+                showPopoverFeedback(
+                    message: "Already provided by \(pluginName)",
+                    detail: "Disable plugin '\(ownerPlugin)' first to enable standalone MCP",
+                    requiresChatReload: false
+                )
+                return
+            }
             projects[index].enabledMCPServerIds.insert(serverId)
             enabled = true
         }
@@ -192,21 +234,36 @@ extension AppState {
     public func toggleProjectPlugin(projectId: String, pluginId: String) {
         guard let index = projects.firstIndex(where: { $0.id == projectId }) else { return }
         let enabled: Bool
+        var replacedMCPs: [String] = []
         if projects[index].enabledPluginIds.contains(pluginId) {
             projects[index].enabledPluginIds.remove(pluginId)
             enabled = false
         } else {
             projects[index].enabledPluginIds.insert(pluginId)
             enabled = true
+            let bundledIndex = PluginScannerService.bundledMCPIndex(for: plugins, enabledPluginIds: [pluginId])
+            let serverMap = Dictionary(uniqueKeysWithValues: servers.map { ($0.id, $0) })
+            for serverId in projects[index].enabledMCPServerIds.sorted() {
+                if bundledIndex.conflictingPluginId(for: serverId, server: serverMap[serverId]) != nil {
+                    projects[index].enabledMCPServerIds.remove(serverId)
+                    replacedMCPs.append(serverId)
+                }
+            }
         }
         triggerProjectSync(project: projects[index], debounceNanoseconds: 250_000_000)
         let plugin = plugins.first(where: { $0.id == pluginId })
         let name = plugin?.name ?? pluginId
         let hasMCP = plugin?.hasMCP ?? false
+        let detail: String
+        if !replacedMCPs.isEmpty {
+            detail = "Replaced duplicate standalone MCP: \(replacedMCPs.joined(separator: ", "))"
+        } else {
+            detail = hasMCP ? "Skills active now · new chat for MCPs" : "Active immediately — no chat restart needed"
+        }
         showPopoverFeedback(
             message: "Synced · \(name) \(enabled ? "enabled" : "disabled")",
-            detail: hasMCP ? "Skills active now · new chat for MCPs" : "Active immediately — no chat restart needed",
-            requiresChatReload: hasMCP
+            detail: detail,
+            requiresChatReload: hasMCP || !replacedMCPs.isEmpty
         )
     }
 
@@ -243,7 +300,12 @@ extension AppState {
                 enabledPluginIds: curGlobalP
             ))
             guard !Task.isCancelled else { return }
-            try await self.syncEngine.syncGlobalConfig(servers: curServers, enabledIds: curGlobalS)
+            try await self.syncEngine.syncGlobalConfig(
+                servers: curServers,
+                enabledIds: curGlobalS,
+                allPlugins: curPlugins,
+                enabledPluginIds: curGlobalP
+            )
             guard !Task.isCancelled else { return }
             try await self.syncEngine.syncGlobalSkills(allSkills: curSkills, enabledSkillIds: curGlobalSk)
             guard !Task.isCancelled else { return }
@@ -452,16 +514,7 @@ extension AppState {
 
     /// Servers inside plugins are written to Claude by the plugin sync and do not belong in the Vault catalog.
     private func pluginBundledServerIds() -> Set<String> {
-        var ids: Set<String> = []
-        for plugin in plugins where plugin.hasMCP && plugin.id != "agy-manager" {
-            let file = URL(fileURLWithPath: plugin.path).appendingPathComponent("mcp_config.json")
-            if let data = try? Data(contentsOf: file),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let servers = json["mcpServers"] as? [String: Any] {
-                ids.formUnion(servers.keys)
-            }
-        }
-        return ids
+        PluginScannerService.bundledMCPIndex(for: plugins).allServerIds
     }
 
     public func refreshProjects() async {

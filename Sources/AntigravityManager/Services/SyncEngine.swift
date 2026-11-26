@@ -16,7 +16,12 @@ public actor SyncEngine {
         projects: [ProjectProfile]
     ) throws {
         // 1. Sync Global
-        try syncGlobalConfig(servers: servers, enabledIds: globalServerIds)
+        try syncGlobalConfig(
+            servers: servers,
+            enabledIds: globalServerIds,
+            allPlugins: plugins,
+            enabledPluginIds: globalPluginIds
+        )
         try syncGlobalSkills(allSkills: skills, enabledSkillIds: globalSkillIds)
         try syncGlobalPlugins(allPlugins: plugins, enabledPluginIds: globalPluginIds)
 
@@ -133,7 +138,12 @@ public actor SyncEngine {
     }
 
     // MARK: - Global MCP Sync
-    public func syncGlobalConfig(servers: [MCPServerDefinition], enabledIds: Set<String>) throws {
+    public func syncGlobalConfig(
+        servers: [MCPServerDefinition],
+        enabledIds: Set<String>,
+        allPlugins: [PluginDefinition] = [],
+        enabledPluginIds: Set<String> = []
+    ) throws {
         _ = createConfigSnapshotIfNeeded(force: false)
 
         let globalConfigDir = PathConstants.globalConfigDirectory
@@ -150,11 +160,20 @@ public actor SyncEngine {
             }
         }
 
+        let bundledIndex = PluginScannerService.bundledMCPIndex(
+            for: allPlugins,
+            enabledPluginIds: enabledPluginIds
+        )
+        let serverMap = Dictionary(uniqueKeysWithValues: servers.map { ($0.id, $0) })
+        let effectiveEnabledIds = enabledIds.filter { serverId in
+            bundledIndex.conflictingPluginId(for: serverId, server: serverMap[serverId]) == nil
+        }
+
         var mcpServersDict: [String: [String: Any]] = [:]
 
         for server in servers where PathConstants.isSafeResourceId(server.id) {
             var rawDict: [String: Any] = server.config.mapValues { $0.toAny() }
-            if enabledIds.contains(server.id) {
+            if effectiveEnabledIds.contains(server.id) {
                 rawDict["disabled"] = false
             } else {
                 rawDict["disabled"] = true
@@ -172,7 +191,7 @@ public actor SyncEngine {
         let data = try JSONSerialization.data(withJSONObject: rootDict, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try PathConstants.writeSecureData(data, to: canonicalGlobalFile, permissions: 0o600)
 
-        syncClaudeGlobalConfig(servers: servers, enabledIds: enabledIds)
+        syncClaudeGlobalConfig(servers: servers, enabledIds: effectiveEnabledIds)
     }
 
     // MARK: - Global Skills Sync

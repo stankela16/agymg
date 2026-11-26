@@ -107,36 +107,43 @@ public struct ProjectScannerService: Sendable {
             let projectPath = discovered[i].path
             let projectURL = URL(fileURLWithPath: projectPath)
             let pluginsDir = projectURL.appendingPathComponent(".agents/plugins", isDirectory: true)
+            var pluginBundledMCPIds: Set<String> = []
             if let pluginFolders = try? fm.contentsOfDirectory(at: pluginsDir, includingPropertiesForKeys: nil) {
                 for pluginFolder in pluginFolders where !pluginFolder.lastPathComponent.hasPrefix(".") {
                     let pluginName = pluginFolder.lastPathComponent
-                    if pluginName != "agy-manager" {
-                        discovered[i].enabledPluginIds.insert(pluginName)
-                    }
-                    let mcpFile = pluginFolder.appendingPathComponent("mcp_config.json")
-                    if let data = try? Data(contentsOf: mcpFile),
-                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let servers = json["mcpServers"] as? [String: Any] {
-                        for serverKey in servers.keys {
-                            discovered[i].enabledMCPServerIds.insert(serverKey)
+                    if pluginName == "agy-manager" {
+                        let mcpFile = pluginFolder.appendingPathComponent("mcp_config.json")
+                        if let data = try? Data(contentsOf: mcpFile),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let servers = json["mcpServers"] as? [String: Any] {
+                            for serverKey in servers.keys where PathConstants.isSafeResourceId(serverKey) {
+                                discovered[i].enabledMCPServerIds.insert(serverKey)
+                            }
                         }
+                    } else {
+                        discovered[i].enabledPluginIds.insert(pluginName)
+                        pluginBundledMCPIds.formUnion(PluginScannerService.bundledMCPServerIds(inPluginDirectory: pluginFolder))
                     }
                 }
             }
             discovered[i].enabledPluginIds.formUnion(SyncEngine.readManifestPluginIds(at: projectURL))
+            for pluginId in discovered[i].enabledPluginIds where PathConstants.isSafeResourceId(pluginId) {
+                let vaultPluginDir = PathConstants.vaultPluginsDirectory.appendingPathComponent(pluginId, isDirectory: true)
+                pluginBundledMCPIds.formUnion(PluginScannerService.bundledMCPServerIds(inPluginDirectory: vaultPluginDir))
+            }
 
             let directMcpFile = projectURL.appendingPathComponent(".agents/mcp_config.json")
             if let data = try? Data(contentsOf: directMcpFile),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let servers = json["mcpServers"] as? [String: Any] {
-                for serverKey in servers.keys {
+                for serverKey in servers.keys where PathConstants.isSafeResourceId(serverKey) && !pluginBundledMCPIds.contains(serverKey) {
                     discovered[i].enabledMCPServerIds.insert(serverKey)
                 }
             }
 
             if let claudeEntry = claudeProjectsMap[projectPath],
                let claudeServers = claudeEntry["mcpServers"] as? [String: Any] {
-                for serverKey in claudeServers.keys {
+                for serverKey in claudeServers.keys where PathConstants.isSafeResourceId(serverKey) && !pluginBundledMCPIds.contains(serverKey) {
                     discovered[i].enabledMCPServerIds.insert(serverKey)
                 }
             }

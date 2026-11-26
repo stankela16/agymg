@@ -1,7 +1,101 @@
 import Foundation
 
+public struct PluginBundledMCPIndex: Sendable, Equatable {
+    /// Maps bundled MCP server ID -> owning plugin ID.
+    public let pluginIdByServerId: [String: String]
+    /// Maps normalized lowercase remote serverUrl -> owning plugin ID.
+    public let pluginIdByNormalizedURL: [String: String]
+
+    public static let empty = PluginBundledMCPIndex(
+        pluginIdByServerId: [:],
+        pluginIdByNormalizedURL: [:]
+    )
+
+    public var isEmpty: Bool {
+        pluginIdByServerId.isEmpty && pluginIdByNormalizedURL.isEmpty
+    }
+
+    public var allServerIds: Set<String> {
+        Set(pluginIdByServerId.keys)
+    }
+
+    public func conflictingPluginId(for serverId: String, server: MCPServerDefinition? = nil) -> String? {
+        if let owner = pluginIdByServerId[serverId] {
+            return owner
+        }
+        if let rawURL = server?.serverUrl {
+            let normalized = SyncEngine.normalizeServerURL(rawURL).lowercased()
+            if !normalized.isEmpty, let owner = pluginIdByNormalizedURL[normalized] {
+                return owner
+            }
+        }
+        return nil
+    }
+}
+
 public struct PluginScannerService: Sendable {
     public init() {}
+
+    public static func bundledMCPServerIds(inPluginDirectory directory: URL) -> Set<String> {
+        let mcpFile = directory.appendingPathComponent("mcp_config.json")
+        guard let data = try? Data(contentsOf: mcpFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = json["mcpServers"] as? [String: Any] else {
+            return []
+        }
+        return Set(servers.keys.filter { PathConstants.isSafeResourceId($0) })
+    }
+
+    public static func bundledMCPIndex(
+        for plugins: [PluginDefinition],
+        enabledPluginIds: Set<String>? = nil
+    ) -> PluginBundledMCPIndex {
+        let fm = FileManager.default
+        let vaultPluginsDir = PathConstants.vaultPluginsDirectory
+        var byServerId: [String: String] = [:]
+        var byURL: [String: String] = [:]
+
+        for plugin in plugins.sorted(by: { $0.id < $1.id }) {
+            guard PathConstants.isSafeResourceId(plugin.id),
+                  plugin.id != "agy-manager" else {
+                continue
+            }
+            if let enabledPluginIds, !enabledPluginIds.contains(plugin.id) {
+                continue
+            }
+
+            let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
+            let sourcePluginURL = fm.fileExists(atPath: vaultPluginURL.path)
+                ? vaultPluginURL
+                : URL(fileURLWithPath: plugin.path)
+            let mcpFile = sourcePluginURL.appendingPathComponent("mcp_config.json")
+
+            guard let data = try? Data(contentsOf: mcpFile),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let servers = json["mcpServers"] as? [String: Any] else {
+                continue
+            }
+
+            for (serverId, rawValue) in servers.sorted(by: { $0.key < $1.key }) {
+                guard PathConstants.isSafeResourceId(serverId) else { continue }
+                if byServerId[serverId] == nil {
+                    byServerId[serverId] = plugin.id
+                }
+                if let rawDict = rawValue as? [String: Any],
+                   let rawURL = (rawDict["serverUrl"] as? String) ?? (rawDict["url"] as? String) {
+                    let normalized = SyncEngine.normalizeServerURL(rawURL).lowercased()
+                    if !normalized.isEmpty && byURL[normalized] == nil {
+                        byURL[normalized] = plugin.id
+                    }
+                }
+            }
+        }
+
+        return PluginBundledMCPIndex(
+            pluginIdByServerId: byServerId,
+            pluginIdByNormalizedURL: byURL
+        )
+    }
 
     public func scanPlugins(in directory: URL) -> [PluginDefinition] {
         let fm = FileManager.default

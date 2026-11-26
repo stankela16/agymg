@@ -224,10 +224,14 @@ final class AntigravityManagerTests: XCTestCase {
         let tempProjectsDir = fm.temporaryDirectory.appendingPathComponent("TestProjects_\(UUID().uuidString)", isDirectory: true)
         let sampleProjectDir = tempProjectsDir.appendingPathComponent("sample-proj", isDirectory: true)
         let samplePluginDir = sampleProjectDir.appendingPathComponent(".agents/plugins/sample-mcp", isDirectory: true)
+        let agyManagerDir = sampleProjectDir.appendingPathComponent(".agents/plugins/agy-manager", isDirectory: true)
 
         try? fm.createDirectory(at: samplePluginDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: agyManagerDir, withIntermediateDirectories: true)
+        let pluginMCP = "{\"mcpServers\": {\"plugin-server\": {\"command\": \"node\"}}}"
         let dummyMCP = "{\"mcpServers\": {\"dummy-server\": {\"command\": \"node\"}}}"
-        try? dummyMCP.write(to: samplePluginDir.appendingPathComponent("mcp_config.json"), atomically: true, encoding: .utf8)
+        try? pluginMCP.write(to: samplePluginDir.appendingPathComponent("mcp_config.json"), atomically: true, encoding: .utf8)
+        try? dummyMCP.write(to: agyManagerDir.appendingPathComponent("mcp_config.json"), atomically: true, encoding: .utf8)
         defer { try? fm.removeItem(at: tempProjectsDir) }
 
         // Test deferred authorization: updateAuthorizationState = false (for showing OnboardingSuccessBadge)
@@ -238,6 +242,8 @@ final class AntigravityManagerTests: XCTestCase {
         let sample = state.projects.first(where: { $0.name == "sample-proj" })
         XCTAssertNotNil(sample, "Must discover sample-proj in directory")
         XCTAssertTrue(sample?.enabledMCPServerIds.contains("dummy-server") ?? false)
+        XCTAssertTrue(sample?.enabledPluginIds.contains("sample-mcp") ?? false)
+        XCTAssertFalse(sample?.enabledMCPServerIds.contains("plugin-server") ?? true, "Plugin-bundled MCP must not duplicate into standalone enabledMCPServerIds")
 
         // Simulate user clicking 'Open Control Center' in the badge
         state.isProjectsFolderAuthorized = true

@@ -342,9 +342,9 @@ final class M4VaultAndSyncCompletenessTests: XCTestCase {
         let vaultServers = await state.vaultService.loadServers()
         XCTAssertTrue(vaultServers.contains(where: { $0.id == "new-cli-mcp" }), "New MCP server should be persisted into Master Vault")
 
-        // 4. Test project-local MCP server ingestion
+        // 4. Test project-local standalone MCP server ingestion (via agy-manager)
         let projectURL = testSandboxDir.appendingPathComponent("Projects/DemoProject", isDirectory: true)
-        let projectPluginsDir = projectURL.appendingPathComponent(".agents/plugins/demo-plugin", isDirectory: true)
+        let projectPluginsDir = projectURL.appendingPathComponent(".agents/plugins/agy-manager", isDirectory: true)
         try fm.createDirectory(at: projectPluginsDir, withIntermediateDirectories: true)
         let projectMCPPayload: [String: Any] = [
             "mcpServers": [

@@ -26,10 +26,30 @@ extension SyncEngine {
 
         let agentsDir = projectURL.appendingPathComponent(".agents", isDirectory: true)
 
-        // 1. Sync Project MCP Servers (via .agents/plugins/agy-manager)
+        // 1. Sync Project MCP Servers (via .agents/plugins/agy-manager), skipping any server already bundled
+        // inside an enabled project plugin so Antigravity never loads duplicate MCP instances.
         let pluginDir = agentsDir.appendingPathComponent("plugins/agy-manager", isDirectory: true)
-        let validServerIds = project.enabledMCPServerIds.filter { PathConstants.isSafeResourceId($0) }
-        if validServerIds.isEmpty {
+        let serverMap = Dictionary(uniqueKeysWithValues: allServers.map { ($0.id, $0) })
+        let bundledIndex = PluginScannerService.bundledMCPIndex(
+            for: allPlugins,
+            enabledPluginIds: project.enabledPluginIds
+        )
+        let validServerIds = project.enabledMCPServerIds.filter { serverId in
+            guard PathConstants.isSafeResourceId(serverId) else { return false }
+            return bundledIndex.conflictingPluginId(for: serverId, server: serverMap[serverId]) == nil
+        }
+
+        var projectServers: [String: [String: Any]] = [:]
+        for serverId in validServerIds {
+            if let server = serverMap[serverId] {
+                var raw = server.config.mapValues { $0.toAny() }
+                raw.removeValue(forKey: "disabled")
+                projectServers[serverId] = raw
+            }
+        }
+
+        let shouldRemoveAgyManager = validServerIds.isEmpty || (!allServers.isEmpty && projectServers.isEmpty)
+        if shouldRemoveAgyManager {
             if fm.fileExists(atPath: pluginDir.path) || isSymlink(at: pluginDir) {
                 try? fm.removeItem(at: pluginDir)
             }
@@ -45,17 +65,6 @@ extension SyncEngine {
             let pluginMeta: [String: Any] = ["name": "agy-manager"]
             let metaData = try JSONSerialization.data(withJSONObject: pluginMeta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             try metaData.write(to: pluginJsonURL, options: .atomic)
-
-            let serverMap = Dictionary(uniqueKeysWithValues: allServers.map { ($0.id, $0) })
-            var projectServers: [String: [String: Any]] = [:]
-
-            for serverId in validServerIds {
-                if let server = serverMap[serverId] {
-                    var raw = server.config.mapValues { $0.toAny() }
-                    raw.removeValue(forKey: "disabled")
-                    projectServers[serverId] = raw
-                }
-            }
 
             let mcpConfigURL = pluginDir.appendingPathComponent("mcp_config.json")
             let mcpPayload: [String: Any] = ["mcpServers": projectServers]
@@ -816,20 +825,26 @@ extension SyncEngine {
         let oauthURLs = loadOAuthServerURLs()
         var oauthBackedIds: Set<String> = []
         let serverMap = Dictionary(uniqueKeysWithValues: allServers.map { ($0.id, $0) })
+        let bundledIndex = PluginScannerService.bundledMCPIndex(
+            for: allPlugins,
+            enabledPluginIds: project.enabledPluginIds
+        )
         var claudeProjectServers: [String: [String: Any]] = [:]
 
         for serverId in project.enabledMCPServerIds where PathConstants.isSafeResourceId(serverId) {
-            if let server = serverMap[serverId] {
-                let raw = server.config.mapValues { $0.toAny() }
-                let converted = convertToClaudeMCPConfig(raw, oauthServerURLs: oauthURLs)
-                if converted["headersHelper"] != nil {
-                    oauthBackedIds.insert(serverId)
-                }
-                claudeProjectServers[serverId] = converted
+            guard let server = serverMap[serverId],
+                  bundledIndex.conflictingPluginId(for: serverId, server: server) == nil else {
+                continue
             }
+            let raw = server.config.mapValues { $0.toAny() }
+            let converted = convertToClaudeMCPConfig(raw, oauthServerURLs: oauthURLs)
+            if converted["headersHelper"] != nil {
+                oauthBackedIds.insert(serverId)
+            }
+            claudeProjectServers[serverId] = converted
         }
 
-        // Include MCP servers bundled inside enabled project plugins
+        // Include MCP servers bundled inside enabled project plugins (plugin definition takes precedence)
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
         for plugin in allPlugins where PathConstants.isSafeResourceId(plugin.id) && project.enabledPluginIds.contains(plugin.id) && plugin.id != "agy-manager" {
             let vaultPluginURL = vaultPluginsDir.appendingPathComponent(plugin.id)
@@ -842,13 +857,7 @@ extension SyncEngine {
                let pluginServers = json["mcpServers"] as? [String: [String: Any]] {
                 for (serverId, rawConfig) in pluginServers where PathConstants.isSafeResourceId(serverId) {
                     guard claudeProjectServers[serverId] == nil else { continue }
-                    let converted: [String: Any]
-                    if let vaultServer = serverMap[serverId] {
-                        let raw = vaultServer.config.mapValues { $0.toAny() }
-                        converted = convertToClaudeMCPConfig(raw, oauthServerURLs: oauthURLs)
-                    } else {
-                        converted = convertToClaudeMCPConfig(rawConfig, oauthServerURLs: oauthURLs)
-                    }
+                    let converted = convertToClaudeMCPConfig(rawConfig, oauthServerURLs: oauthURLs)
                     if converted["headersHelper"] != nil {
                         oauthBackedIds.insert(serverId)
                     }
