@@ -497,7 +497,7 @@ extension AppState {
         guard !adopted.isEmpty else { return }
 
         await loadData()
-        if !adopted.serverIds.isEmpty || !adopted.skillIds.isEmpty {
+        if !adopted.serverIds.isEmpty || !adopted.skillIds.isEmpty || !adopted.pluginIds.isEmpty {
             await performGlobalSync()
         }
         for projectId in adopted.projectIds {
@@ -507,8 +507,8 @@ extension AppState {
             status: .info,
             category: .system,
             targetName: "External Changes",
-            message: "Adopted \(adopted.serverIds.count) MCPs and \(adopted.skillIds.count) skills from Claude Code / Antigravity",
-            details: (adopted.serverIds.sorted() + adopted.skillIds.sorted()).joined(separator: ", ")
+            message: "Adopted \(adopted.serverIds.count) MCPs, \(adopted.skillIds.count) skills, and \(adopted.pluginIds.count) plugins from Claude Code / Antigravity",
+            details: (adopted.serverIds.sorted() + adopted.skillIds.sorted() + adopted.pluginIds.sorted()).joined(separator: ", ")
         )
     }
 

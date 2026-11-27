@@ -36,6 +36,24 @@ public struct PluginBundledMCPIndex: Sendable, Equatable {
 public struct PluginScannerService: Sendable {
     public init() {}
 
+    /// Returns plugin IDs registered as Antigravity Marketplace installs (`installedFrom`) in config.json.
+    public static func marketplaceInstalledPluginIds() -> Set<String> {
+        var ids: Set<String> = []
+        for configFile in PathConstants.allAntigravityConfigFiles {
+            guard let data = try? Data(contentsOf: configFile),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let plugins = json["plugins"] as? [String: [String: Any]] else {
+                continue
+            }
+            for (pluginId, metadata) in plugins where PathConstants.isSafeResourceId(pluginId) {
+                if metadata["installedFrom"] != nil {
+                    ids.insert(pluginId)
+                }
+            }
+        }
+        return ids
+    }
+
     public static func bundledMCPServerIds(inPluginDirectory directory: URL) -> Set<String> {
         let mcpFile = directory.appendingPathComponent("mcp_config.json")
         guard let data = try? Data(contentsOf: mcpFile),

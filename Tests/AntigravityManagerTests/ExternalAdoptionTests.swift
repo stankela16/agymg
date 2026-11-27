@@ -127,4 +127,72 @@ final class ExternalAdoptionTests: XCTestCase {
         XCTAssertEqual(entries.first?["path"] as? String, ".claude/skills")
         XCTAssertEqual(entries.first?["include_only"] as? [String], ["local"])
     }
+
+    private func makePlugin(named name: String, in directory: URL) throws {
+        let folder = directory.appendingPathComponent(name, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["name": name]).write(to: folder.appendingPathComponent("plugin.json"))
+    }
+
+    func testMarketplacePluginIsCopiedNotMovedAndEnabledGlobally() async throws {
+        try makePlugin(named: "chrome-devtools-plugin", in: PathConstants.globalPluginsDirectory)
+        try writeJSON([
+            "plugins": [
+                "chrome-devtools-plugin": [
+                    "installedFrom": ["id": "antigravity-plugins-official/plugin/chrome-devtools-plugin"]
+                ]
+            ]
+        ], to: PathConstants.globalAntigravityConfigFile)
+
+        let adopted = await vault.adoptExternalChanges(projects: [], minimumSkillAge: 0)
+
+        XCTAssertEqual(adopted.pluginIds, ["chrome-devtools-plugin"])
+        let globalPlugin = PathConstants.globalPluginsDirectory.appendingPathComponent("chrome-devtools-plugin")
+        let vaultPlugin = PathConstants.vaultPluginsDirectory.appendingPathComponent("chrome-devtools-plugin")
+        XCTAssertTrue(fm.fileExists(atPath: globalPlugin.appendingPathComponent("plugin.json").path), "Marketplace plugin directory must stay in place")
+        XCTAssertNil(try? fm.destinationOfSymbolicLink(atPath: globalPlugin.path), "Marketplace plugin must not be replaced by a symlink")
+        XCTAssertTrue(fm.fileExists(atPath: vaultPlugin.appendingPathComponent("plugin.json").path), "Marketplace plugin must also be copied into Vault")
+        let selection = await vault.loadGlobalSelection()
+        XCTAssertTrue(selection.enabledPluginIds.contains("chrome-devtools-plugin"))
+    }
+
+    func testLocalGlobalPluginMovesToVaultAndGetsEnabled() async throws {
+        try makePlugin(named: "custom-local-plugin", in: PathConstants.globalPluginsDirectory)
+
+        let adopted = await vault.adoptExternalChanges(projects: [], minimumSkillAge: 0)
+
+        XCTAssertEqual(adopted.pluginIds, ["custom-local-plugin"])
+        let globalPlugin = PathConstants.globalPluginsDirectory.appendingPathComponent("custom-local-plugin")
+        let vaultPlugin = PathConstants.vaultPluginsDirectory.appendingPathComponent("custom-local-plugin")
+        XCTAssertFalse(fm.fileExists(atPath: globalPlugin.path))
+        XCTAssertTrue(fm.fileExists(atPath: vaultPlugin.appendingPathComponent("plugin.json").path))
+        let selection = await vault.loadGlobalSelection()
+        XCTAssertTrue(selection.enabledPluginIds.contains("custom-local-plugin"))
+    }
+
+    func testSyncGlobalPluginsDoesNotRemoveMarketplacePluginWhenDisabledInSelection() async throws {
+        try makePlugin(named: "chrome-devtools-plugin", in: PathConstants.globalPluginsDirectory)
+        try writeJSON([
+            "plugins": [
+                "chrome-devtools-plugin": [
+                    "installedFrom": ["id": "antigravity-plugins-official/plugin/chrome-devtools-plugin"]
+                ]
+            ]
+        ], to: PathConstants.globalAntigravityConfigFile)
+
+        let globalPlugin = PathConstants.globalPluginsDirectory.appendingPathComponent("chrome-devtools-plugin")
+        let pluginDef = PluginDefinition(
+            id: "chrome-devtools-plugin",
+            name: "Chrome DevTools",
+            description: "Test",
+            path: globalPlugin.path,
+            hasMCP: false,
+            hasSkills: false
+        )
+
+        try await SyncEngine().syncGlobalPlugins(allPlugins: [pluginDef], enabledPluginIds: [])
+
+        XCTAssertTrue(fm.fileExists(atPath: globalPlugin.appendingPathComponent("plugin.json").path), "Marketplace plugin must not be moved out of ~/.gemini/config/plugins")
+        XCTAssertTrue(fm.fileExists(atPath: PathConstants.vaultPluginsDirectory.appendingPathComponent("chrome-devtools-plugin/plugin.json").path), "Marketplace plugin should be copied to Vault for project reuse")
+    }
 }

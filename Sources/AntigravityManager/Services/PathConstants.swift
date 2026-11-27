@@ -167,6 +167,18 @@ public enum PathConstants {
         globalConfigDirectory.appendingPathComponent("mcp_config.json")
     }
 
+    public static var globalAntigravityConfigFile: URL {
+        globalConfigDirectory.appendingPathComponent("config.json")
+    }
+
+    public static var allAntigravityConfigFiles: [URL] {
+        var files = [globalAntigravityConfigFile]
+        for profHome in antigravityProfileHomes {
+            files.append(profHome.appendingPathComponent(".gemini/config/config.json"))
+        }
+        return files
+    }
+
     public static var globalProjectsDirectory: URL {
         globalConfigDirectory.appendingPathComponent("projects", isDirectory: true)
     }

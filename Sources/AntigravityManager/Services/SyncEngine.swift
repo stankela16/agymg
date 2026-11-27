@@ -240,6 +240,7 @@ public actor SyncEngine {
     public func syncGlobalPlugins(allPlugins: [PluginDefinition], enabledPluginIds: Set<String>) throws {
         let globalPluginsDir = PathConstants.globalPluginsDirectory
         let vaultPluginsDir = PathConstants.vaultPluginsDirectory
+        let marketplacePluginIds = PluginScannerService.marketplaceInstalledPluginIds()
 
         try fm.createDirectory(at: globalPluginsDir, withIntermediateDirectories: true)
 
@@ -269,7 +270,12 @@ public actor SyncEngine {
                     try? fm.removeItem(at: targetURL)
                 } else if fm.fileExists(atPath: targetURL.path) && !fm.fileExists(atPath: vaultPluginURL.path) {
                     try? fm.createDirectory(at: vaultPluginsDir, withIntermediateDirectories: true)
-                    try? fm.moveItem(at: targetURL, to: vaultPluginURL)
+                    if marketplacePluginIds.contains(plugin.id) {
+                        // Never move or remove Marketplace-managed plugin directories out of Antigravity.
+                        try? fm.copyItem(at: targetURL, to: vaultPluginURL)
+                    } else {
+                        try? fm.moveItem(at: targetURL, to: vaultPluginURL)
+                    }
                 }
             }
         }

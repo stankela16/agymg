@@ -21,9 +21,10 @@ public struct GlobalSelection: Codable, Sendable {
 public struct ExternalAdoption: Sendable {
     public var serverIds: Set<String> = []
     public var skillIds: Set<String> = []
+    public var pluginIds: Set<String> = []
     public var projectIds: Set<String> = []
 
-    public var isEmpty: Bool { serverIds.isEmpty && skillIds.isEmpty && projectIds.isEmpty }
+    public var isEmpty: Bool { serverIds.isEmpty && skillIds.isEmpty && pluginIds.isEmpty && projectIds.isEmpty }
 }
 
 public actor VaultService {
@@ -403,6 +404,35 @@ public actor VaultService {
                     selection.enabledSkillIds.insert(skillId)
                     result.skillIds.insert(skillId)
                 }
+            }
+        }
+
+        // 4. Plugins installed in Antigravity (~/.gemini/config/plugins): adopt into Vault and enable globally.
+        // Marketplace-managed plugins are copied (never moved) so Antigravity keeps owning its install directory.
+        let marketplacePluginIds = PluginScannerService.marketplaceInstalledPluginIds()
+        let globalPluginItems = (try? fm.contentsOfDirectory(at: PathConstants.globalPluginsDirectory, includingPropertiesForKeys: [.isDirectoryKey], options: [])) ?? []
+        for item in globalPluginItems where item.lastPathComponent != "agy-manager" && !item.lastPathComponent.hasPrefix(".") {
+            let pluginId = item.lastPathComponent
+            guard PathConstants.isSafeResourceId(pluginId) else { continue }
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let vaultURL = PathConstants.vaultPluginsDirectory.appendingPathComponent(pluginId, isDirectory: true)
+            guard (try? fm.destinationOfSymbolicLink(atPath: item.path)) == nil,
+                  !fm.fileExists(atPath: vaultURL.path) else { continue }
+            let manifestURL = item.appendingPathComponent("plugin.json")
+            let ageAnchorPath = fm.fileExists(atPath: manifestURL.path) ? manifestURL.path : item.path
+            guard let modified = (try? fm.attributesOfItem(atPath: ageAnchorPath))?[.modificationDate] as? Date,
+                  now.timeIntervalSince(modified) >= minimumSkillAge else { continue }
+            try? fm.createDirectory(at: PathConstants.vaultPluginsDirectory, withIntermediateDirectories: true)
+            let adoptedToVault: Bool
+            if marketplacePluginIds.contains(pluginId) {
+                adoptedToVault = (try? fm.copyItem(at: item, to: vaultURL)) != nil
+            } else {
+                adoptedToVault = (try? fm.moveItem(at: item, to: vaultURL)) != nil
+            }
+            if adoptedToVault {
+                selection.enabledPluginIds.insert(pluginId)
+                result.pluginIds.insert(pluginId)
             }
         }
 
